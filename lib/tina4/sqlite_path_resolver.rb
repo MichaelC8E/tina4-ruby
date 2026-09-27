@@ -49,10 +49,22 @@ module Tina4
         # Absolute — trust the user; don't auto-mkdir outside cwd.
         raw
       else
-        # Relative — resolve under cwd; auto-mkdir parent dir.
+        # Relative — resolve under cwd; create the parent (mode 0775) ONLY when
+        # it stays inside cwd (ADR-0086). A relative path whose parent escapes
+        # the project (e.g. "../../etc/foo.db") is REFUSED loudly here — never
+        # the silent mkdir outside the project that used to happen.
         resolved = File.join(Dir.pwd, raw)
         parent = File.dirname(resolved)
-        FileUtils.mkdir_p(parent) unless File.directory?(parent)
+        expanded_parent = File.expand_path(parent)
+        cwd = File.expand_path(Dir.pwd)
+        unless expanded_parent == cwd || expanded_parent.start_with?(cwd + File::SEPARATOR)
+          raise ArgumentError,
+                "SQLite path #{connection_string.inspect} resolves outside the project " \
+                "directory: #{expanded_parent.inspect} is not within #{cwd.inspect}. " \
+                "Tina4 refuses to create directories outside the project (ADR-0086). " \
+                "Use an absolute path for a database that lives outside the project."
+        end
+        FileUtils.mkdir_p(parent, mode: 0o775) unless File.directory?(parent)
         resolved
       end
     end
