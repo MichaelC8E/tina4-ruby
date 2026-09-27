@@ -8,10 +8,14 @@
 
 require_relative "schema_split"
 require_relative "../sqlite3_gem"
+require_relative "../sqlite_path_resolver"
 
 module Tina4
   module Drivers
     class SqliteDriver
+      # Shared SQLite path resolution — one home for both SQLite resolvers.
+      extend Tina4::SqlitePathResolver
+
       include Tina4::DatabaseAdapter
       include SchemaSplit
       attr_reader :connection
@@ -49,50 +53,6 @@ module Tina4
         @connection.busy_timeout = 5000
         @connection.execute("PRAGMA journal_mode=WAL")
         @connection.execute("PRAGMA foreign_keys=ON")
-      end
-
-      # Resolve a SQLite URL / path against the project root (cwd).
-      #
-      # Convention (matches tina4-python, tina4-php, tina4-nodejs):
-      #   sqlite::memory:              → :memory:
-      #   sqlite:///:memory:           → :memory:
-      #   sqlite:///app.db             → {cwd}/app.db  (relative)
-      #   sqlite:///data/app.db        → {cwd}/data/app.db  (relative; auto-mkdir under cwd)
-      #   sqlite:////var/data/app.db   → /var/data/app.db  (absolute; no auto-mkdir)
-      #   sqlite:///C:/Users/app.db    → C:/Users/app.db  (Windows absolute)
-      #
-      # Never mkdir outside cwd — that was the root cause of the
-      # "Read-only file system: '/data'" crash on macOS.
-      def self.resolve_path(connection_string)
-        return ":memory:" if connection_string == "sqlite::memory:" || connection_string == "sqlite:///:memory:"
-
-        # Strip the scheme + up to three slashes, preserving a potential fourth
-        # slash (absolute) or drive letter.
-        # `sqlite3:` is a documented alias for `sqlite:`. Normalise it FIRST or
-        # none of the strips below match and `raw` keeps the whole connection
-        # string, so the database file is literally named "sqlite3:app.db".
-        # Not merely ugly: a colon is an illegal filename character on Windows,
-        # so the documented alias is unusable there. DatabaseUrl already
-        # normalises it; this method duplicates the strip instead of calling
-        # it, which is how the two drifted.
-        normalised = connection_string.sub(/^sqlite3:/, "sqlite:")
-        raw = normalised.sub(/^sqlite:\/\/\//, "").sub(/^sqlite:\/\//, "").sub(/^sqlite:/, "")
-        return ":memory:" if raw == ":memory:"
-
-        is_windows_abs = raw.match?(/^[A-Za-z]:[\/\\]/)
-        is_unix_abs    = raw.start_with?("/")
-
-        if is_windows_abs || is_unix_abs
-          # Absolute — trust the user; don't auto-mkdir outside cwd.
-          raw
-        else
-          # Relative — resolve under cwd; auto-mkdir parent dir.
-          resolved = File.join(Dir.pwd, raw)
-          parent = File.dirname(resolved)
-          require "fileutils"
-          FileUtils.mkdir_p(parent) unless File.directory?(parent)
-          resolved
-        end
       end
 
       def close
