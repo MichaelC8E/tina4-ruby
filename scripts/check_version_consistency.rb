@@ -35,6 +35,7 @@ VERSION_CHECKS = [
   ["lib/tina4/version.rb", /^\s*VERSION\s*=\s*["']([^"']+)["']/, "VERSION constant"],
   ["CLAUDE.md",            /^Version\s+(\d+\.\d+\.\d+)\b/,        "header 'Version X'"],
   ["CLAUDE.md",            /^-\s*Version:\s*(\d+\.\d+\.\d+)\b/,   "'- Version:' line"],
+  ["AGENTS.md",            /^#\s+Tina4\b.*?\b(\d+\.\d+\.\d+)\b/,  "title header 'Tina4 ... X.Y.Z'"],
   ["Gemfile.lock",         /^\s+tina4ruby \((\d+\.\d+\.\d+)\)/,   "tina4ruby lock pin"]
 ].freeze
 
