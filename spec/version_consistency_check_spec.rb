@@ -40,6 +40,7 @@ RSpec.describe "scripts/check_version_consistency.rb" do
     FileUtils.cp(File.join(repo_root, "lib", "tina4", "version.rb"),
                  File.join(dir, "lib", "tina4", "version.rb"))
     FileUtils.cp(File.join(repo_root, "CLAUDE.md"),   File.join(dir, "CLAUDE.md"))
+    FileUtils.cp(File.join(repo_root, "AGENTS.md"),   File.join(dir, "AGENTS.md"))
     FileUtils.cp(File.join(repo_root, "Gemfile.lock"), File.join(dir, "Gemfile.lock"))
   end
 
@@ -89,6 +90,29 @@ RSpec.describe "scripts/check_version_consistency.rb" do
       expect(status.exitstatus).not_to eq(0), "expected non-zero, got 0:\n#{output}"
       expect(output).to include("CLAUDE.md")
       expect(output).to include("8.8.8")
+    end
+  end
+
+  it "FAILS and NAMES AGENTS.md when its title header is the file left behind" do
+    Dir.mktmpdir do |dir|
+      stage_fixture(dir, repo_root)
+
+      agents = File.join(dir, "AGENTS.md")
+      # UTF-8: AGENTS.md's title carries an em dash, and the locale default here
+      # is US-ASCII -- a plain File.read would make #sub raise on the high bytes.
+      # Rewrite ONLY the version in the "# Tina4 ... X.Y.Z" title header.
+      original = File.read(agents, encoding: "UTF-8")
+      mutated  = original.sub(/^(#\s+Tina4\b.*?\b)\d+\.\d+\.\d+\b/, '\17.7.7')
+      expect(mutated).not_to eq(original), "fixture mutation did not change the AGENTS.md header"
+      File.write(agents, mutated)
+
+      stdout, stderr, status = Open3.capture3("ruby", script, current, "--root", dir)
+      output = stdout + stderr
+
+      expect(status.exitstatus).not_to eq(0), "expected non-zero, got 0:\n#{output}"
+      expect(output).to include("AGENTS.md")  # names the drifted file
+      expect(output).to include("7.7.7")       # shows the stale value
+      expect(output).to include(current)       # shows what was expected
     end
   end
 
