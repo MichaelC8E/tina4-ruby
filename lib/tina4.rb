@@ -13,6 +13,7 @@ require_relative "tina4/log"
 require_relative "tina4/debug"  # backward compat alias
 require_relative "tina4/env"
 require_relative "tina4/sqlite_path_resolver"
+require_relative "tina4/row_symbolizer"
 require_relative "tina4/router"
 require_relative "tina4/request"
 require_relative "tina4/response"

@@ -8,12 +8,14 @@
 
 require_relative "../sqlite3_gem"
 require_relative "../sqlite_path_resolver"
+require_relative "../row_symbolizer"
 
 module Tina4
   module Adapters
     class Sqlite3Adapter
       # Shared SQLite path resolution — one home for both SQLite resolvers.
       extend Tina4::SqlitePathResolver
+      include Tina4::RowSymbolizer
 
       attr_reader :connection, :db_path
 
@@ -140,34 +142,6 @@ module Tina4
       # Drivers::SqliteDriver#apply_limit).
       def apply_limit(sql, limit, offset = 0)
         "#{sql}\nLIMIT #{limit} OFFSET #{offset}"
-      end
-
-      private
-
-      # Symbolize a whole result set's keys, computing the mapping ONCE per query
-      # rather than per cell. See the matching helper in drivers/sqlite_driver.rb
-      # for the rationale: the per-row form ran k.to_s.to_sym for every cell, so a
-      # 5,000-row x 6-column fetch did 30,000 conversions for 6 distinct keys. The
-      # is_a? guard still drops any positional Integer keys older gems emit.
-      def symbolize_rows(rows)
-        return rows if rows.empty?
-
-        str_keys = rows.first.keys.select { |k| k.is_a?(String) || k.is_a?(Symbol) }
-        sym_keys = str_keys.map(&:to_sym)
-        count = str_keys.length
-        rows.map do |row|
-          out = {}
-          i = 0
-          while i < count
-            out[sym_keys[i]] = row[str_keys[i]]
-            i += 1
-          end
-          out
-        end
-      end
-
-      def symbolize_keys(hash)
-        symbolize_rows([hash]).first
       end
     end
   end
