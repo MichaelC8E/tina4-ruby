@@ -13,6 +13,7 @@
 # Case names match the auth_token_contract.json "debug-is-explicit" invariant.
 # No mocks: a real process, a real socket, real .env files.
 require "spec_helper"
+require_relative "support/shutdown_probe"
 require "net/http"
 require "socket"
 require "rbconfig"
@@ -40,29 +41,25 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
     log = File.join(dir, "serve.log")
     pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
                         "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
+    # Wait for the child to be fully READY before asking about /__dev, exactly
+    # as the sibling serve specs do (banner_real_bind, version_contract,
+    # dual_port_contract all wait_until_serving!("/health")). /health is mounted
+    # regardless of debug, so a 200 there proves the child both bound its socket
+    # AND finished mounting its route table. Without this gate the probe could
+    # win the race against route mounting: the socket accepts the connection but
+    # /__dev is not registered yet, so the server answers 404 and the "debug on"
+    # control asserted !=404 against a server that was merely not ready. Polling
+    # /__dev directly cannot tell "debug is off" (a real 404) from "not mounted
+    # yet" (a transient 404); /health can, because it is 200 either way.
+    server = ShutdownProbe::Server.new(pid, port, dir, log)
     begin
-      deadline = Time.now + 30
-      while Time.now < deadline
-        raise "serve exited early: #{File.read(log)}" if Process.waitpid(pid, Process::WNOHANG)
+      server.wait_until_serving!("/health", timeout: 30)
+      status, = server.get("/__dev")
+      raise "serve never answered /__dev: #{server.log}" if status.nil?
 
-        begin
-          return Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/__dev")).code.to_i
-        rescue SystemCallError, IOError, Net::ReadTimeout
-          sleep 0.2
-        end
-      end
-      raise "serve never answered: #{File.read(log)}"
+      status
     ensure
-      begin
-        Process.kill("TERM", -pid)
-        Timeout.timeout(10) { Process.wait(pid) }
-      rescue Errno::ESRCH, Errno::ECHILD
-        nil
-      rescue Timeout::Error
-        Process.kill("KILL", -pid)
-        Process.wait(pid)
-      end
-      FileUtils.rm_rf(dir)
+      server.destroy!
     end
   end
 
