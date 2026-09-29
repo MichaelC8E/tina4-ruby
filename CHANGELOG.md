@@ -6,6 +6,13 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.141 — 2026-09-29
+
+A hardening release. The sibling php framework shipped committed absolute symlinks that broke `composer install` on Windows, so every framework now refuses a committed symlink up front. Ruby carries no such link today, so this guard is preventive parity: it keeps the door shut before anything can wander in. The framework still carries no required runtime dependencies.
+
+### Security
+- A new `scripts/check-no-symlinks.sh` gate refuses any committed symlink (git mode 120000). A committed symlink breaks Windows and Composer extraction and is a supply-chain risk. The gate runs first in the test workflow, and a real RSpec spec proves it by mutation — it stages a symlink in a throwaway git repo, watches the guard go red, then removes it and watches it go green.
+
 ## 3.13.140 — 2026-09-28
 
 A housekeeping release that tightens the guards and dedups the SQLite plumbing. The CLAUDE.md doc-drift gate now watches this repo, so a doc that names a Tina4 method the code no longer has fails loudly instead of drifting on quietly. The SQLite path resolver learnt some manners: an escaping relative path is refused, and it creates the parent folders itself at 0775 (ADR-0086). The framework still carries no required runtime dependencies.

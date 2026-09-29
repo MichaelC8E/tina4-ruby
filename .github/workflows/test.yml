@@ -264,6 +264,13 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # A committed symlink (git mode 120000) breaks Windows/Composer extraction
+      # and is a supply-chain risk. The sibling php framework shipped 134 such
+      # links; every framework now refuses them. Fast, no services -- run it
+      # first so a bad tree fails loudly before the long service-backed suite.
+      - name: No committed symlinks
+        run: sh scripts/check-no-symlinks.sh
+
       # Extra Postgres databases beyond the service's own POSTGRES_DB=tina4_rb:
       #   tina4_rb2 - the two-DB named-connection test (spec/bind_database_spec.rb,
       #               TINA4_TEST_PG_DB_2=tina4_rb2).
