@@ -6,6 +6,24 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.142 — 2026-09-30
+
+A release led by real fixes for anyone on WebSockets, sessions, or the gallery queue, then a round of internal tidying and a new metrics gate that holds the line on complexity. The framework still carries no required runtime dependencies.
+
+### Fixes
+- WebSocket now delivers a fragmented message whole. A client that splits a payload across continuation frames (RFC 6455 §5.4) used to have each fragment handed over on its own, so the handler saw pieces instead of the message. The frames are reassembled and delivered once, complete (#87).
+- `session.regenerate` mid-request re-emits the session cookie, so a login that rotates the id keeps the browser in step instead of dropping it on the next request. Parity with the same fix in the php framework (tina4-php#253) (#90).
+- The gallery queue reads a bounded batch instead of draining without limit, and the NATS backplane keeper stops busy-polling and blocks for work instead. Less wheel-spinning, the same behaviour (#89).
+- A flaky serve-debug spec now polls `/__dev` for real readiness and retries a transient boot, so the suite stops tripping over its own startup timing (#91).
+
+### Refactors
+- Cyclomatic complexity comes down across the flagged modules, and all six cross-file duplicate blocks in `lib/tina4` are gone, each one characterised first so the behaviour cannot shift (#86, #88).
+
+### Chore
+- `TINA4_TEST_NATS_URL` joins the canonical test-env set (ADR-0038), so the NATS URL is named the same way everywhere.
+- The nats-pure dependency and its transitive gems were licence-reviewed, unblocking the release-package workflow.
+- CI wires the `tina4 metrics --fail-on-regression` ratchet gate with a committed baseline (ADR-0002), so a new complexity offender fails the build instead of drifting in unseen (#92).
+
 ## 3.13.141 — 2026-09-29
 
 A hardening release. The sibling php framework shipped committed absolute symlinks that broke `composer install` on Windows, so every framework now refuses a committed symlink up front. Ruby carries no such link today, so this guard is preventive parity: it keeps the door shut before anything can wander in. The framework still carries no required runtime dependencies.
