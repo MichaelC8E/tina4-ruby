@@ -175,25 +175,28 @@ module Tina4
 
     def subscribe(channel, &block)
       @mutex.synchronize do
-        sid = @nats.subscribe(channel) do |msg|
+        # NATS::Client#subscribe returns a NATS::Subscription. The client's own
+        # #unsubscribe is private in nats-pure 2.x, so we tear a subscription
+        # down through the subscription object, not the client (see #unsubscribe).
+        subscription = @nats.subscribe(channel) do |msg|
           block.call(msg.data) if @running
         end
-        @subs[channel] = sid
+        @subs[channel] = subscription
 
-        # Run NATS event processing in a background thread
-        @threads[channel] ||= Thread.new do
-          loop do
-            break unless @running
-            sleep 0.01
-          end
-        end
+        # The NATS client dispatches subscription callbacks on its own reader
+        # thread, so this keeper thread only has to stay alive until unsubscribe
+        # or close kills it. It blocks on an empty queue - nothing is ever
+        # pushed - so it waits at zero CPU. Before, it woke a hundred times a
+        # second on `sleep 0.01` just to re-check @running, burning energy to do
+        # nothing (Carbonah E004).
+        @threads[channel] ||= Thread.new { Thread::Queue.new.pop }
       end
     end
 
     def unsubscribe(channel)
       @mutex.synchronize do
-        sid = @subs.delete(channel)
-        @nats.unsubscribe(sid) if sid
+        subscription = @subs.delete(channel)
+        subscription&.unsubscribe
         thread = @threads.delete(channel)
         thread&.kill
       end
@@ -202,7 +205,7 @@ module Tina4
     def close
       @running = false
       @mutex.synchronize do
-        @subs.each_value { |sid| @nats.unsubscribe(sid) rescue nil }
+        @subs.each_value { |subscription| subscription.unsubscribe rescue nil }
         @subs.clear
         @threads.each_value { |t| t.kill }
         @threads.clear
