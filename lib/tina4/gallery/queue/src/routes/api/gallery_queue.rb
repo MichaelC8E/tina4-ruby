@@ -39,6 +39,13 @@ end
 
 GALLERY_QUEUE_MAX_RETRIES = 3
 
+# The next message to consume or fail: the highest-priority pending one whose
+# delay has passed. LIMIT 1 keeps the database from sorting and returning every
+# pending row when the demo only ever wants the first (Carbonah E003).
+GALLERY_QUEUE_NEXT_PENDING_SQL =
+  "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' " \
+  "AND available_at <= ? ORDER BY priority DESC, id ASC LIMIT 1"
+
 GALLERY_QUEUE_HTML = <<~'HTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -273,7 +280,7 @@ Tina4::Router.post("/api/gallery/queue/consume") do |request, response|
   now = _gallery_queue_now
 
   row = db.fetch_one(
-    "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' AND available_at <= ? ORDER BY priority DESC, id ASC",
+    GALLERY_QUEUE_NEXT_PENDING_SQL,
     ["gallery-tasks", now]
   )
 
@@ -295,7 +302,7 @@ Tina4::Router.post("/api/gallery/queue/fail") do |request, response|
   now = _gallery_queue_now
 
   row = db.fetch_one(
-    "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' AND available_at <= ? ORDER BY priority DESC, id ASC",
+    GALLERY_QUEUE_NEXT_PENDING_SQL,
     ["gallery-tasks", now]
   )
 

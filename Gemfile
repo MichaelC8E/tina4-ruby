@@ -66,3 +66,13 @@ end
 group :odbc, optional: true do
   gem "ruby-odbc", "~> 0.9"
 end
+
+# The `nats-pure` client (pure Ruby, no native extension) for the live WebSocket
+# NATS-backplane specs. OPTIONAL like the rest: a plain `bundle install` skips it
+# and the framework loads it lazily only when TINA4_WS_BACKPLANE=nats
+# (ADR-0067). Opt in where a NATS server is reachable — the lab exports
+# TINA4_TEST_NATS_URL and sets `bundle config set --local with nats`; everywhere
+# else the group is absent and the NATS-backplane specs skip cleanly.
+group :nats, optional: true do
+  gem "nats-pure", "~> 2.4"
+end

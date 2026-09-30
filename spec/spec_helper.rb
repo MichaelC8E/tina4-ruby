@@ -110,6 +110,7 @@ TINA4_GATE_OPTIONAL_ENGINES = {
   "mssql" => %w[TINA4_TEST_MSSQL_URL],
   "swoole" => %w[TINA4_TEST_SWOOLE],
   "oidc" => %w[TINA4_TEST_OIDC_ISSUER],
+  "nats" => %w[TINA4_TEST_NATS_URL],
   "neo4j" => %w[TINA4_TEST_NEO4J_URL],
   "memgraph" => %w[TINA4_TEST_MEMGRAPH_URL],
   "arango" => %w[TINA4_TEST_ARANGO_URL],
