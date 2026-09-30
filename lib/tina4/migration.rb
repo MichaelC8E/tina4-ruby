@@ -492,56 +492,23 @@ module Tina4
 
         # Block comment /* … */ — stripped.
         if ch == "/" && i + 1 < n && sql[i + 1] == "*"
-          endpos = sql.index("*/", i + 2)
-          i = endpos ? endpos + 2 : n
+          i = skip_block_comment(sql, i, n)
           next
         end
 
         # Line comment -- … — stripped to end of line; the newline is left for the
         # next iteration so line structure (and NEXT-line boundaries) survive.
         if ch == "-" && i + 1 < n && sql[i + 1] == "-"
-          endpos = sql.index("\n", i + 2)
-          i = endpos || n
+          i = skip_line_comment(sql, i, n)
           next
         end
 
-        # Single-quoted string literal — '' escapes a quote. Copied verbatim.
-        if ch == "'"
-          current << "'"
-          i += 1
-          while i < n
-            if sql[i] == "'" && i + 1 < n && sql[i + 1] == "'"
-              current << "''"
-              i += 2
-            elsif sql[i] == "'"
-              current << "'"
-              i += 1
-              break
-            else
-              current << sql[i]
-              i += 1
-            end
-          end
-          next
-        end
-
-        # Double-quoted identifier — "" escapes a quote. Same verbatim handling.
-        if ch == '"'
-          current << '"'
-          i += 1
-          while i < n
-            if sql[i] == '"' && i + 1 < n && sql[i + 1] == '"'
-              current << '""'
-              i += 2
-            elsif sql[i] == '"'
-              current << '"'
-              i += 1
-              break
-            else
-              current << sql[i]
-              i += 1
-            end
-          end
+        # '…' single-quoted string or "…" double-quoted identifier — copied
+        # verbatim, honouring the SQL doubled-quote escape ('' / ""). A ;, -- or
+        # /* inside a literal is data, not a delimiter or comment.
+        if ch == "'" || ch == '"'
+          literal, i = read_quoted_literal(sql, i, ch)
+          current << literal
           next
         end
 
@@ -590,6 +557,47 @@ module Tina4
     def parse_set_term(statement)
       m = statement.strip.match(/\ASET\s+TERM\s+(\S+)\z/i)
       m && m[1]
+    end
+
+    # Skip a /* … */ block comment that opens at +start_index+. Returns the index
+    # just past the closing "*/", or +length+ when the comment is unterminated.
+    def skip_block_comment(sql, start_index, length)
+      endpos = sql.index("*/", start_index + 2)
+      endpos ? endpos + 2 : length
+    end
+
+    # Skip a -- … line comment that opens at +start_index+. Returns the index of
+    # the terminating newline (left for the next iteration so line structure
+    # survives), or +length+ when the comment runs to the end of the script.
+    def skip_line_comment(sql, start_index, length)
+      sql.index("\n", start_index + 2) || length
+    end
+
+    # Read a '…' string literal or "…" quoted identifier that opens at the
+    # +quote+ at +start_index+. A doubled quote ('' or "") is an escaped quote,
+    # not a terminator, so it is copied and scanning continues. An unterminated
+    # literal is read to the end of the script (matching the raw scan it replaces).
+    #
+    # @return [Array(String, Integer)] the verbatim literal (both quotes included)
+    #   and the index just past the closing quote.
+    def read_quoted_literal(sql, start_index, quote)
+      n = sql.length
+      literal = quote.dup
+      i = start_index + 1
+      while i < n
+        if sql[i] == quote && i + 1 < n && sql[i + 1] == quote
+          literal << quote << quote
+          i += 2
+        elsif sql[i] == quote
+          literal << quote
+          i += 1
+          break
+        else
+          literal << sql[i]
+          i += 1
+        end
+      end
+      [literal, i]
     end
 
     def execute_sql_file(file)
