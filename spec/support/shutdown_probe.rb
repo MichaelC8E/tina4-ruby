@@ -21,6 +21,12 @@ require "tmpdir"
 require "fileutils"
 
 module ShutdownProbe
+  # Raised when a spawned child dies, or never serves, DURING boot - before it
+  # ever answers on its socket. Distinct from a later assertion failure so a
+  # caller can retry a transient boot hiccup (e.g. a macOS getaddrinfo flake on
+  # a fresh port) without masking a genuine "never boots" or a real assertion.
+  class BootError < StandardError; end
+
   module_function
 
   def worktree_lib
@@ -119,11 +125,11 @@ module ShutdownProbe
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
         return self if get(path)&.first == 200
-        raise "server exited during boot\n--- server log ---\n#{log}" if exited?
+        raise BootError, "server exited during boot\n--- server log ---\n#{log}" if exited?
 
         sleep 0.1
       end
-      raise "server never served #{path} on port #{@port}\n--- server log ---\n#{log}"
+      raise BootError, "server never served #{path} on port #{@port}\n--- server log ---\n#{log}"
     end
 
     def wait_for_file!(name, timeout: 15)
@@ -155,6 +161,30 @@ module ShutdownProbe
       end
     rescue StandardError
       nil
+    end
+
+    # Poll `path` until its status settles, so a route that is still being
+    # mounted is never mistaken for the answer. A debug-gated route (e.g.
+    # /__dev) comes up AFTER /health, so right after boot it can answer a
+    # transient `not_ready` (404) for a few milliseconds before it registers.
+    # Return the FIRST status that is not `not_ready` the instant it appears
+    # (the route mounted); if it stays `not_ready` for the whole bounded window,
+    # return that settled status (the route is genuinely absent). This kills the
+    # readiness race without weakening either answer: a present route is waited
+    # for, an absent one is confirmed by outlasting the window.
+    def poll_status(path, settle_within: 5, interval: 0.05, not_ready: 404)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + settle_within
+      last = nil
+      loop do
+        status, = get(path)
+        return status if status && status != not_ready
+
+        last = status unless status.nil?
+        break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
+        sleep interval
+      end
+      last
     end
 
     # Issue a request on its own thread; the thread's value is the outcome.
