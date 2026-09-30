@@ -7,10 +7,15 @@
 
 
 require_relative "../parse_json"
+require_relative "republish_retry_policy"
 
 module Tina4
   module QueueBackends
     class RabbitmqBackend
+      # Shared at-least-once fail() (ADR-0022): re-publish carrying the new
+      # attempt count, dead-letter at the limit, ack last. See KafkaBackend.
+      include RepublishRetryPolicy
+
       def initialize(options = {})
         require "bunny"
         @connection = Bunny.new(
@@ -71,17 +76,10 @@ module Tina4
         return nil unless payload
 
         data = Tina4.parse_json(payload)
-        # attempts and error MUST be carried back. Rebuilding the Job from
-        # topic/payload/id alone reset attempts to 0 on every redelivery, so
-        # fail()'s attempts >= max_retries check could never trip and a poison
-        # job would be retried forever instead of dead-lettering.
-        msg = Tina4::Job.new(
-          topic: data["topic"],
-          payload: data["payload"],
-          id: data["id"],
-          attempts: data["attempts"] || 0,
-          error: data["error"]
-        )
+        # attempts and error MUST be carried back (Job.from_payload does this);
+        # rebuilding from topic/payload/id alone reset attempts to 0 on every
+        # redelivery, so a poison job would be retried forever.
+        msg = Tina4::Job.from_payload(data)
         @last_delivery_tag = delivery_info.delivery_tag
         msg
       end
@@ -108,32 +106,12 @@ module Tina4
         dlq.publish(message.to_json, persistent: true)
       end
 
-      # Record a failed attempt, then retry it or dead-letter it.
-      #
-      # This did not exist. Job#fail guarded on respond_to?(:fail) and silently
-      # degraded to in-memory bookkeeping, so job.fail() NEVER reached the
-      # broker: the delivery stayed unacked, no dead letter was written, and
-      # both failed() and dead_letters() reported nothing. The job was lost as
-      # far as the application could see.
-      #
-      # AMQP basic.nack(requeue=true) returns the ORIGINAL body unmodified --
-      # the protocol carries no delivery counter -- so a retry RE-PUBLISHES a
-      # body carrying the new count instead. That is what every AMQP client
-      # that counts attempts does (Celery, Spring AMQP's
-      # RepublishMessageRecoverer, laravel-queue-rabbitmq).
-      def fail(job, error = "")
-        job.attempts += 1
-        job.error = error
-        if job.attempts >= @max_retries
-          dead_letter(job)
-        else
-          enqueue(job)
-        end
-        # Ack LAST: the re-publish (or dead-letter) is durable before the
-        # original leaves the queue, so a crash in between redelivers rather
-        # than loses. That is at-least-once, which is the contract.
-        complete(job)
-      end
+      # fail() comes from RepublishRetryPolicy. AMQP basic.nack(requeue=true)
+      # returns the ORIGINAL body unmodified -- the protocol carries no delivery
+      # counter -- so the shared policy RE-PUBLISHES a body carrying the new
+      # count, then complete() acks LAST. That is what every AMQP client that
+      # counts attempts does (Celery, Spring AMQP's RepublishMessageRecoverer,
+      # laravel-queue-rabbitmq).
 
       # Explicit re-queue requested by the caller (job.retry). Always
       # re-enqueues regardless of the retry limit -- a manual override,

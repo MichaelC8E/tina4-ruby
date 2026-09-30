@@ -169,13 +169,11 @@ module Tina4
         key.to_s.match?(SENSITIVE_KEY_RE) ? REDACTED : value
       end
 
+      # Delegates to the framework's one canonical escaper (Frond.escape_html,
+      # single-pass, byte-identical & < > " ' -> &amp; &lt; &gt; &quot; &#39;)
+      # rather than keeping a private copy of the escape table here.
       def esc(text)
-        text.to_s
-            .gsub("&", "&amp;")
-            .gsub("<", "&lt;")
-            .gsub(">", "&gt;")
-            .gsub('"', "&quot;")
-            .gsub("'", "&#39;")
+        Tina4::Frond.escape_html(text)
       end
 
       def parse_backtrace_line(line)

@@ -7,10 +7,15 @@
 
 
 require_relative "../parse_json"
+require_relative "republish_retry_policy"
 
 module Tina4
   module QueueBackends
     class KafkaBackend
+      # Shared at-least-once fail() (ADR-0022): re-publish carrying the new
+      # attempt count, dead-letter at the limit, ack last. See RabbitmqBackend.
+      include RepublishRetryPolicy
+
       def initialize(options = {})
         require "rdkafka"
         @brokers = options[:brokers] || "localhost:9092"
@@ -131,17 +136,10 @@ module Tina4
         data = Tina4.parse_json(msg.payload)
         @last_message = msg
 
-        # attempts and error MUST be carried back. Rebuilding from
-        # topic/payload/id alone reset attempts to 0 on every redelivery, so
-        # fail()'s attempts >= max_retries check could never trip and a poison
-        # record would be re-produced forever instead of dead-lettering.
-        Tina4::Job.new(
-          topic: data["topic"],
-          payload: data["payload"],
-          id: data["id"],
-          attempts: data["attempts"] || 0,
-          error: data["error"]
-        )
+        # attempts and error MUST be carried back (Job.from_payload does this);
+        # rebuilding from topic/payload/id alone reset attempts to 0 on every
+        # redelivery, so a poison record would be re-produced forever.
+        Tina4::Job.from_payload(data)
       rescue Rdkafka::RdkafkaError
         nil
       end
@@ -186,26 +184,9 @@ module Tina4
         acknowledge(message)
       end
 
-      # Record a failed attempt, then retry it or dead-letter it.
-      #
-      # This did not exist. Job#fail guarded on respond_to?(:fail) and silently
-      # degraded to in-memory bookkeeping, so job.fail() NEVER reached Kafka:
-      # the offset was never committed and no dead letter was produced.
-      #
-      # A retry RE-PRODUCES a record carrying the new count, because a Kafka
-      # record is immutable and carries no delivery counter. The offset is
-      # committed LAST so a crash in between redelivers rather than loses -
-      # at-least-once, which is the contract.
-      def fail(job, error = "")
-        job.attempts += 1
-        job.error = error
-        if job.attempts >= @max_retries
-          dead_letter(job)
-        else
-          enqueue(job)
-        end
-        acknowledge(job)
-      end
+      # fail() comes from RepublishRetryPolicy (re-produce carrying the new
+      # count, dead-letter at the limit, commit the offset LAST). Kafka's
+      # +complete+ is +acknowledge+, so the terminal ack commits the offset.
 
       def retry(job, delay_seconds: 0)
         if delay_seconds.to_f > 0

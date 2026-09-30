@@ -13,6 +13,23 @@ module Tina4
     attr_reader :id, :topic, :payload, :created_at, :priority, :available_at
     attr_accessor :status, :attempts, :error, :queue
 
+    # Rebuild a Job from a parsed queue payload (a Hash with string keys, as
+    # produced by #to_json and read back off the wire). attempts and error MUST
+    # ride along: rebuilding from topic/payload/id alone reset attempts to 0 on
+    # every redelivery, so fail()'s attempts >= max_retries check could never
+    # trip and a poison job would be retried forever instead of dead-lettering.
+    # Shared by the broker backends (kafka, rabbitmq) whose wire format is this
+    # JSON.
+    def self.from_payload(data)
+      new(
+        topic: data["topic"],
+        payload: data["payload"],
+        id: data["id"],
+        attempts: data["attempts"] || 0,
+        error: data["error"]
+      )
+    end
+
     def initialize(topic:, payload:, id: nil, priority: 0, available_at: nil,
                    attempts: 0, created_at: nil, error: nil, queue: nil)
       @id = id || SecureRandom.uuid

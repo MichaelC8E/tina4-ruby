@@ -407,14 +407,12 @@ module Tina4
         }
       end
 
-      # Escape HTML special characters
+      # Escape HTML special characters. Delegates to the framework's one
+      # canonical escaper (Frond.escape_html, single-pass, byte-identical
+      # & < > " ' -> &amp; &lt; &gt; &quot; &#39;) so CRUD and the error
+      # overlay never carry their own private copy of the HTML escape table.
       def h(text)
-        text.to_s
-          .gsub("&", "&amp;")
-          .gsub("<", "&lt;")
-          .gsub(">", "&gt;")
-          .gsub('"', "&quot;")
-          .gsub("'", "&#39;")
+        Tina4::Frond.escape_html(text)
       end
 
       # Pretty label from a column name: "user_name" => "User Name"
