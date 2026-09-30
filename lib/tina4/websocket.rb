@@ -691,6 +691,11 @@ module Tina4
 
       Thread.new do
         begin
+          # A large message (a pasted image in a chat, base64 inside JSON) arrives as a first frame with FIN clear,
+          # then CONTINUATION frames (RFC 6455 section 5.4); control frames may come in between. The first piece used
+          # to be emitted as the whole message and the rest ignored. Same design as the Python master (_handle_frame).
+          fragments = nil
+          fragment_opcode = nil
           loop do
             frame = connection.read_frame
             break unless frame
@@ -698,8 +703,26 @@ module Tina4
             connection.touch # mark activity for the idle reaper
 
             case frame[:opcode]
+            when 0x0 # Continuation - a stray one (no message started) is dropped
+              next unless fragments
+              fragments << frame[:data]
+              if frame[:fin]
+                emit(:message, connection, fragments) if fragment_opcode == 0x1
+                fragments = nil
+                fragment_opcode = nil
+              end
             when 0x1 # Text
-              emit(:message, connection, frame[:data])
+              if frame[:fin]
+                emit(:message, connection, frame[:data])
+              else
+                fragments = frame[:data].dup
+                fragment_opcode = 0x1
+              end
+            when 0x2 # Binary - not delivered (as before), but its pieces are one message, never text
+              unless frame[:fin]
+                fragments = frame[:data].dup
+                fragment_opcode = 0x2
+              end
             when 0x8 # Close
               break
             when 0x9 # Ping
@@ -867,6 +890,7 @@ module Tina4
       first_byte = @socket.getbyte
       return nil unless first_byte
 
+      fin = (first_byte & 0x80) != 0
       opcode = first_byte & 0x0F
       second_byte = @socket.getbyte
       return nil unless second_byte
@@ -887,7 +911,7 @@ module Tina4
         data = data.bytes.each_with_index.map { |b, i| b ^ mask_key[i % 4] }.pack("C*")
       end
 
-      { opcode: opcode, data: data }
+      { fin: fin, opcode: opcode, data: data }
     rescue IOError, EOFError
       nil
     end
