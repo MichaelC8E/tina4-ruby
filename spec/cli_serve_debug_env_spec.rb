@@ -28,38 +28,67 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
   end
 
   def dev_status(env_file, *flags)
-    dir = Dir.mktmpdir("tina4_serve")
-    FileUtils.mkdir_p(File.join(dir, "src", "routes"))
-    File.write(File.join(dir, ".env"), env_file) if env_file
-    port = free_port
     exe = File.expand_path("../exe/tina4ruby", __dir__)
     lib = File.expand_path("../lib", __dir__)
     env = ENV.to_h.reject { |k, _| k.start_with?("TINA4_") }.merge(
       "TINA4_NO_BROWSER" => "true", "TINA4_SECRET" => "cli-serve-debug-secret-0123456789abcdef",
-      "TINA4_OVERRIDE_CLIENT" => "true", "TINA4_NO_TAKEOVER" => "true", "TINA4_DEFAULT_WEBSERVER" => "true"
+      "TINA4_OVERRIDE_CLIENT" => "true", "TINA4_NO_TAKEOVER" => "true", "TINA4_DEFAULT_WEBSERVER" => "true",
+      # /__dev is gated by debug on the MAIN port; the auxiliary AI/test port
+      # (port + 1000, debug-only) is not under test here. Binding it just doubles
+      # this example's exposure to a transient getaddrinfo hiccup, so suppress it
+      # exactly as the sibling harness (ShutdownProbe.base_env) already does. The
+      # four debug assertions are unchanged - none of them touch the AI port.
+      "TINA4_NO_AI_PORT" => "true"
     )
-    log = File.join(dir, "serve.log")
-    pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
-                        "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
-    # Wait for the child to be fully READY before asking about /__dev, exactly
-    # as the sibling serve specs do (banner_real_bind, version_contract,
-    # dual_port_contract all wait_until_serving!("/health")). /health is mounted
-    # regardless of debug, so a 200 there proves the child both bound its socket
-    # AND finished mounting its route table. Without this gate the probe could
-    # win the race against route mounting: the socket accepts the connection but
-    # /__dev is not registered yet, so the server answers 404 and the "debug on"
-    # control asserted !=404 against a server that was merely not ready. Polling
-    # /__dev directly cannot tell "debug is off" (a real 404) from "not mounted
-    # yet" (a transient 404); /health can, because it is 200 either way.
-    server = ShutdownProbe::Server.new(pid, port, dir, log)
-    begin
-      server.wait_until_serving!("/health", timeout: 30)
-      status, = server.get("/__dev")
-      raise "serve never answered /__dev: #{server.log}" if status.nil?
+    # A boot can die before /health for a reason that has nothing to do with the
+    # debug gate: on macOS getaddrinfo("127.0.0.1") transiently raises
+    # Socket::ResolutionError under process churn (the very same host bound the
+    # main port one line earlier), which kills the child on its auxiliary port.
+    # That is an environment hiccup, not the behaviour under test, so a boot that
+    # dies before serving /health is retried on a FRESH port and temp project.
+    # The debug assertion itself is never retried - poll_status runs only once
+    # the child is serving, and its result is returned as-is. A server that
+    # genuinely never boots still raises after the attempts are spent.
+    boot_attempts = 3
+    boot_attempts.times do |attempt|
+      dir = Dir.mktmpdir("tina4_serve")
+      FileUtils.mkdir_p(File.join(dir, "src", "routes"))
+      File.write(File.join(dir, ".env"), env_file) if env_file
+      port = free_port
+      log = File.join(dir, "serve.log")
+      pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
+                          "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
+      # /health is mounted regardless of debug, so a 200 there proves the child
+      # bound its socket - but it comes up BEFORE the debug-gated /__dev routes
+      # finish mounting. #84 probed /__dev exactly ONCE right after /health,
+      # which is the wrong readiness signal: when debug is on, at the instant
+      # /health returns 200 the /__dev route may not be registered yet, so that
+      # single probe can catch a transient "not mounted yet" 404 and mistake it
+      # for the answer - failing the "debug on" control. The cure is to wait for
+      # /health (the child is up) and then POLL /__dev over a bounded window:
+      # poll_status returns the first non-404 the instant debug-on mounts the
+      # route (race killed), and returns a settled 404 only after debug-off has
+      # kept it absent for the whole window (a genuine "debug is off" answer).
+      # Neither assertion is weakened - the two "debug on" cases wait for the
+      # route to actually mount, the two "debug off"/production cases still
+      # return 404 by outlasting the window.
+      server = ShutdownProbe::Server.new(pid, port, dir, log)
+      begin
+        server.wait_until_serving!("/health", timeout: 30)
+        status = server.poll_status("/__dev")
+        raise "serve never answered /__dev: #{server.log}" if status.nil?
 
-      status
-    ensure
-      server.destroy!
+        return status
+      rescue ShutdownProbe::BootError
+        raise if attempt == boot_attempts - 1
+
+        # A transient getaddrinfo failure arrives in a short burst, so back off
+        # before the next spawn to let the resolver recover rather than retrying
+        # straight back into the same bad window.
+        sleep(0.5 * (attempt + 1))
+      ensure
+        server.destroy!
+      end
     end
   end
 
