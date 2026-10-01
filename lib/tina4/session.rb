@@ -175,23 +175,72 @@ module Tina4
     def clear
       @data = {}
       @modified = true
+      @cleared = true
     end
 
     def to_hash
       @data.dup
     end
 
-    # Persist the session if dirty. On a backend write failure the error is
-    # logged and false is returned — the @modified (dirty) flag is RETAINED so
-    # a later save can retry. Returns true on a successful (or no-op) write.
+    # Persist this request's session. On a backend failure the error is logged
+    # and false is returned — the @modified (dirty) flag is RETAINED so a later
+    # save can retry. Returns true on a successful (or no-op) write.
     #
     # A cleared id (@id nil, e.g. after #destroy) is a no-op: there is nothing
-    # to persist, and a write would re-create the just-destroyed record. Mirrors
-    # the Python master's `if self._session_id and self._dirty`.
+    # to persist, and a write would re-create the just-destroyed record.
+    #
+    # Another request may have changed or ended this session since this one
+    # loaded it: a logout, a #regenerate, a set that took a privilege away.
+    # Writing back the whole snapshot loaded at the start undid all of those, so
+    # a request in flight across a logout logged the user straight back in. The
+    # save therefore re-reads the stored record and writes only what THIS
+    # request changed onto it, and never re-creates a record another request
+    # removed: it ends the session for this request instead, so no cookie goes
+    # out for it.
+    #
+    # SLIDING EXPIRY (ADR-0087): a started session the store already holds is
+    # re-written on EVERY save, even when this request changed nothing. That
+    # write re-stamps the backend deadline to now + TINA4_SESSION_TTL, so expiry
+    # is measured from the last request that TOUCHED the session, not from its
+    # last change — a user actively reading pages stays logged in. The re-write
+    # is the SAME re-read, merged record the concurrent-save contract computes,
+    # so sliding never clobbers a concurrent change. PHP is the reference. The
+    # guards above take precedence over the slide: no id → nothing to slide;
+    # a record another request ended → forget + end, never re-created; a failed
+    # read → deadline untouched, dirty kept for a retry; TINA4_SESSION_TTL=0 →
+    # the slide re-stamps a zero (immortal) deadline (ADR-0027).
+    #
+    # The slide is scoped to @stored — an id the STORE actually holds (adopted,
+    # not freshly minted). ADR-0087's own guard: "a request with no session (no
+    # id issued, OR THE ID WAS NEVER ADOPTED) writes nothing — there is no
+    # deadline to move." A brand-new, unmodified session (minted id, @stored
+    # false) therefore still no-ops, exactly as before; a modified session of
+    # any kind still writes.
     def save
-      return true unless @id && @modified
-      if safe_write(@id, @data, @ttl)
+      return true unless @id && (@modified || @stored)
+
+      record = @data
+      if @stored
+        current, failed = current_record
+        # Whether the record still exists is unknown, so nothing is written;
+        # the dirty flag is kept for a later retry.
+        return false if failed
+
+        if current.nil?
+          forget
+          @ended = true
+          return true
+        end
+        record = merged(current) unless @cleared
+      end
+      if safe_write(@id, record, @ttl)
         @modified = false
+        # An empty record is no session (#start never adopts one), so the next
+        # save writes whole rather than take this request's own empty write for
+        # a logout.
+        @stored = !record.empty?
+        @cleared = false
+        @loaded = fingerprints(@data)
         true
       else
         false # dirty flag retained for retry
@@ -205,9 +254,7 @@ module Tina4
     # (nulls sessionId). A fresh session needs a new #start, which mints a new id.
     def destroy
       safe_destroy(@id) if @id
-      @id = nil
-      @data = {}
-      @modified = false
+      forget
     end
 
     # Get a session value with optional default.
@@ -272,11 +319,32 @@ module Tina4
     # session fixation (a pre-auth session ID must not survive into the
     # authenticated session). Destroys the old backend record (best-effort)
     # and persists under the new ID.
+    #
+    # What is carried is the session as it is stored now with this request's
+    # own changes applied, the same merge #save does. If another request ended
+    # the session after this one loaded it (a logout, or a regenerate of its
+    # own), it stays ended: nothing is carried, no id is minted and nil is
+    # returned, so no cookie goes out to replace the one that request sent.
     def regenerate
+      return nil if @ended
+
       old_id = @id
+      if old_id && @stored
+        current, failed = current_record
+        unless failed
+          if current.nil?
+            forget
+            @ended = true
+            return nil
+          end
+          @data.replace(merged(current)) unless @cleared
+        end
+      end
       @id = SecureRandom.hex(32)
       safe_destroy(old_id)
       @modified = true
+      # Nothing is stored under the new id yet, so the save writes it whole.
+      @stored = false
       save
       @id
     end
@@ -383,7 +451,74 @@ module Tina4
       @id = session_id
       @data = data
       @modified = false
+      # @stored: this request is working on a record the store holds, so a save
+      # must never re-create it once it has gone. An empty record does not
+      # count: it is no session. A failed read adopts the id with {}
+      # (#existing_session_data): not a record this request has seen, so its
+      # first save writes whole.
+      @stored = !data.empty?
+      # @loaded: one fingerprint per key of what this request last saw stored;
+      # #save compares the live data against it to find what THIS request
+      # changed. @cleared: #clear ran since the last save, so the save replaces
+      # the stored record instead of merging into it.
+      @loaded = @stored ? fingerprints(@data) : {}
+      @cleared = false
+      # @ended: this request found its session ended by another request (the
+      # record it loaded is gone). It stays ended for the rest of the request:
+      # #regenerate mints nothing either.
+      @ended = false
       @id
+    end
+
+    # Forget the session in memory: no data, no id, nothing left to save. What
+    # #destroy does after removing the record, and what #save does when it
+    # finds another request already removed it.
+    def forget
+      @id = nil
+      @data = {}
+      @modified = false
+      @stored = false
+      @cleared = false
+      @loaded = {}
+    end
+
+    # The record as stored right now, as [data, failed]. nil and empty both mean
+    # "no session", exactly as in #existing_session_data.
+    def current_record
+      return [nil, true] if degraded?
+
+      data = @handler.read(@id)
+      [data.nil? || (data.respond_to?(:empty?) && data.empty?) ? nil : data, false]
+    rescue StandardError => e
+      log_backend_error("read", e)
+      raise if @strict
+      [nil, true]
+    end
+
+    # The stored record with only this request's own changes applied to it: the
+    # keys it set or changed since it last loaded or saved, minus the keys it
+    # removed. Every other key keeps the value the store holds now.
+    def merged(current)
+      record = current.dup
+      @data.each do |key, value|
+        now = fingerprint(value)
+        record[key] = value if now.nil? || @loaded[key] != now
+      end
+      @loaded.each_key { |key| record.delete(key) unless @data.key?(key) }
+      record
+    end
+
+    def fingerprints(data)
+      data.each_with_object({}) { |(key, value), prints| prints[key] = fingerprint(value) }
+    end
+
+    # The stored form of a value, for telling whether a request changed it.
+    # nil when it cannot be serialised: that always counts as changed, because
+    # writing a value again is harmless and missing a change is not.
+    def fingerprint(value)
+      JSON.generate(value)
+    rescue StandardError
+      nil
     end
 
     # The stored data for session_id when the backend HOLDS a session under it,
