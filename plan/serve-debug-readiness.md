@@ -13,7 +13,28 @@ frameworks that share it, all with real (no-mock) regression tests.
 - [ ] Regression test: aux-port parity (Node)
 - [ ] Verify on CI, loop the serve spec 5+ times, mutation-check the source fix
 
-## CONFIRMED ROOT CAUSE (from a CI failure's child serve.log) — PORT IDENTITY, not readiness
+## TRUE ROOT CAUSE (deterministically reproduced + mutation-proven) — PARENT-ENV INHERITANCE
+The child env in `dev_status` is `ENV.to_h.reject { TINA4_* }.merge(...)` passed to
+`Process.spawn(env, ...)` WITHOUT `unsetenv_others: true`. `Process.spawn` MERGES `env`
+onto the PARENT environment; `reject` only OMITS keys, and omission means INHERIT, not
+delete. So the child inherited the rspec parent's TINA4_ vars: `spec_helper.rb:18` pins
+`TINA4_LOG_LEVEL=NONE`, and whenever a prior example (RSpec random order) left
+`TINA4_DEBUG=false` in the parent, the debug-ON child inherited `TINA4_DEBUG=false`. The
+temp `.env`'s `TINA4_DEBUG=true` could not win because env load is first-wins
+(`ENV[k] ||= v`). The child booted **Debug OFF** → `/__dev` settled 404.
+
+Reproduced deterministically: `TINA4_DEBUG=false bundle exec rspec spec/cli_serve_debug_env_spec.rb`
+fails the "debug true" case WITHOUT the fix and passes WITH it. A standalone repro boots the
+child `Debug: OFF (Log level: NONE)` (the exact CI-failure banner) without `unsetenv_others`
+and `Debug: ON (Log level: ALL)` with it. **FIX: `unsetenv_others: true` on the spawn** — the
+child gets exactly the intended env, TINA4_DEBUG genuinely unset, so the `.env` value applies.
+
+Defence-in-depth also kept (a CI failure's log also showed a genuine "port in use", so port
+contention is real): `wait_until_serving!` checks child-exit before trusting a 200 and takes an
+optional `require_log` identity guard (the child's own `Server: …:<thisport>` banner), so a
+foreign server on a reused port is never mistaken for ours; boot retries on a fresh port.
+
+## Earlier (secondary) finding from the CI serve.log — PORT IDENTITY
 The flake REPRODUCED on CI under load (2/6 reruns) as a genuine `dev_status == 404`
 for the debug-on case. The instrumented failure dumped the child's own serve.log:
 ```
