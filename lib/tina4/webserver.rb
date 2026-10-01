@@ -138,6 +138,19 @@ module Tina4
           puts "  Test Port: http://localhost:#{ai_port} (stable — no hot-reload)"
         rescue Errno::EADDRINUSE
           puts "  Test Port: SKIPPED (port #{ai_port} in use)"
+        rescue SocketError, SystemCallError => e
+          # The auxiliary AI/test port is a debug CONVENIENCE, never
+          # load-bearing. Its bind must DEGRADE to no-aux-port, never crash the
+          # main server the operator actually asked for. The old rescue caught
+          # only Errno::EADDRINUSE, so any OTHER bind failure propagated out of
+          # #start and killed the whole boot: a transient
+          # getaddrinfo/Socket::ResolutionError on a fresh host under process
+          # churn (a measured macOS artifact), Errno::EADDRNOTAVAIL, Errno::EACCES.
+          # Catch the broad bind-failure set (SocketError covers
+          # Socket::ResolutionError; SystemCallError covers every Errno::*), log
+          # LOUD so it is never silent, and carry on main-port only.
+          Tina4::Log.error("Test Port: SKIPPED — auxiliary port #{ai_port} bind failed (#{e.class}: #{e.message})")
+          puts "  Test Port: SKIPPED (#{e.class})"
         end
       end
 
