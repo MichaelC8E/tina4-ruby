@@ -56,8 +56,23 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
       File.write(File.join(dir, ".env"), env_file) if env_file
       port = free_port
       log = File.join(dir, "serve.log")
+      # unsetenv_others: true is THE fix for the recurring flake. Without it,
+      # Process.spawn MERGES `env` onto the PARENT process environment, and the
+      # `reject { TINA4_* }` above only OMITS those keys from the hash - omission
+      # means INHERIT, not delete. So the child inherited the rspec parent's
+      # TINA4_ vars: spec_helper pins TINA4_LOG_LEVEL=NONE, and whenever a prior
+      # example (RSpec random order) left TINA4_DEBUG=false in the parent, the
+      # debug-ON child inherited TINA4_DEBUG=false. The temp .env's
+      # TINA4_DEBUG=true then could NOT win because env load is first-wins
+      # (ENV[k] ||= v). The child booted Debug OFF, so /__dev answered a settled
+      # 404 - the exact failure, confirmed by the child banner in a CI failure:
+      # "Debug: OFF (Log level: NONE)" - neither value this spec passes.
+      # unsetenv_others gives the child EXACTLY this hash (the real non-TINA4
+      # environment it needs, plus the six intended TINA4_ keys) and nothing
+      # inherited, so TINA4_DEBUG is genuinely unset and the .env value applies.
       pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
-                          "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
+                          "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true,
+                          unsetenv_others: true)
       # ROOT CAUSE of the recurring flake (confirmed from a CI failure's child
       # serve.log): NOT a /__dev readiness race. /__dev is gated on
       # ENV["TINA4_DEBUG"], loaded before the socket accepts, so a dispatching
