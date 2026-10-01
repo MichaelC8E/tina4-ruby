@@ -59,19 +59,19 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
       pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
                           "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
       # /health is mounted regardless of debug, so a 200 there proves the child
-      # bound its socket - but it comes up BEFORE the debug-gated /__dev routes
-      # finish mounting. #84 probed /__dev exactly ONCE right after /health,
-      # which is the wrong readiness signal: when debug is on, at the instant
-      # /health returns 200 the /__dev route may not be registered yet, so that
-      # single probe can catch a transient "not mounted yet" 404 and mistake it
-      # for the answer - failing the "debug on" control. The cure is to wait for
-      # /health (the child is up) and then POLL /__dev over a bounded window:
-      # poll_status returns the first non-404 the instant debug-on mounts the
-      # route (race killed), and returns a settled 404 only after debug-off has
-      # kept it absent for the whole window (a genuine "debug is off" answer).
-      # Neither assertion is weakened - the two "debug on" cases wait for the
-      # route to actually mount, the two "debug off"/production cases still
-      # return 404 by outlasting the window.
+      # is serving. /__dev is NOT a late-mounted route: it is a per-request
+      # dispatch stage gated on ENV["TINA4_DEBUG"] (dispatch_pipeline.rb
+      # dev_routes -> DevAdmin.handle_request / DevAdmin.enabled?), and the env
+      # is loaded in initialize! BEFORE the socket ever accepts. So a dispatching
+      # server answers /__dev correctly on the first successful connection -
+      # non-404 when debug is on, 404 when it is off - and socket-up already
+      # implies /__dev is live (debug on). #84's single probe could still be
+      # fooled by a transient CONNECTION failure under load (not a mount race).
+      # poll_status waits for /health (child up) then asks /__dev, retrying only
+      # transient connection failures within the SAME generous deadline as the
+      # /health wait (so CI starvation cannot expire it): it returns the first
+      # non-404 the instant it appears (debug on) and a settled 404 after a short
+      # stable window (debug off). Neither assertion is weakened.
       server = ShutdownProbe::Server.new(pid, port, dir, log)
       begin
         server.wait_until_serving!("/health", timeout: 30)

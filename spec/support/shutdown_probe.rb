@@ -163,28 +163,55 @@ module ShutdownProbe
       nil
     end
 
-    # Poll `path` until its status settles, so a route that is still being
-    # mounted is never mistaken for the answer. A debug-gated route (e.g.
-    # /__dev) comes up AFTER /health, so right after boot it can answer a
-    # transient `not_ready` (404) for a few milliseconds before it registers.
-    # Return the FIRST status that is not `not_ready` the instant it appears
-    # (the route mounted); if it stays `not_ready` for the whole bounded window,
-    # return that settled status (the route is genuinely absent). This kills the
-    # readiness race without weakening either answer: a present route is waited
-    # for, an absent one is confirmed by outlasting the window.
-    def poll_status(path, settle_within: 5, interval: 0.05, not_ready: 404)
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + settle_within
-      last = nil
+    # Ask a `/__dev`-style debug-gated path for its real answer, once the child
+    # is already serving (/health 200).
+    #
+    # Readiness is NOT a race in Tina4 Ruby: /__dev is not a late-mounted route,
+    # it is a per-request dispatch stage gated on ENV["TINA4_DEBUG"], and the env
+    # is loaded before the socket ever accepts (tina4.rb initialize! -> env load,
+    # then webserver #start binds). So a dispatching server (which /health 200
+    # proves) answers /__dev correctly on the FIRST successful connection: a
+    # non-404 when debug is on, a 404 when it is off. There is no transient
+    # "not mounted yet" 404 to poll through.
+    #
+    # The ONLY thing worth tolerating is a transient CONNECTION failure (a reset
+    # or timeout under CI load, which `get` returns as nil). The previous version
+    # bounded that tolerance by a FIXED 5 s window, decoupled from the generous
+    # /health wait, so a burst of starvation-induced nils could expire the window
+    # and the example would raise. Bound it instead by the SAME generous
+    # `deadline` the /health wait uses, so CI starvation can never expire it:
+    #
+    #   - debug ON  -> the first successful probe returns a non-404; returned the
+    #                  instant it appears.
+    #   - debug OFF -> the first successful probe returns `not_ready` (404);
+    #                  confirmed by a short stable `settle_within` so a lone
+    #                  transient is never mistaken for the answer, then returned.
+    #   - connection failures (nil) are retried until `deadline`, never counted.
+    #
+    # Returns the settled status, or nil if the child never answered at all
+    # within the deadline (a genuine "never served /__dev").
+    def poll_status(path, deadline: 30, settle_within: 1.0, interval: 0.05, not_ready: 404)
+      hard_stop = Process.clock_gettime(Process::CLOCK_MONOTONIC) + deadline
+      not_ready_since = nil
       loop do
-        status, = get(path)
-        return status if status && status != not_ready
+        status, = get(path, timeout: 3)
+        if status && status != not_ready
+          return status
+        elsif status == not_ready
+          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          not_ready_since ||= now
+          return not_ready if now - not_ready_since >= settle_within
+        else
+          not_ready_since = nil # connection failure: do not count toward settle
+        end
 
-        last = status unless status.nil?
-        break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= hard_stop
 
         sleep interval
       end
-      last
+      # Deadline spent. A stable-but-unsettled 404 still answers "absent"; only a
+      # child we never once reached returns nil.
+      not_ready_since ? not_ready : nil
     end
 
     # Issue a request on its own thread; the thread's value is the outcome.
