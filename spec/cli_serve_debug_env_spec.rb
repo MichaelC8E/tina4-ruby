@@ -76,6 +76,16 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
       begin
         server.wait_until_serving!("/health", timeout: 30)
         status = server.poll_status("/__dev")
+        # Capture a full diagnostic BEFORE destroy! removes the temp project, so
+        # an unexpected result (the historical flake) fails with the child's own
+        # boot log instead of a bare status code. The banner records Debug ON/OFF,
+        # which decides env-not-applied vs a dispatch bug at a glance.
+        @last_diag = {
+          status: status, port: port,
+          health: server.get("/health"),
+          reprobe: Array.new(4) { server.get("/__dev")&.first },
+          log: server.log
+        }
         raise "serve never answered /__dev: #{server.log}" if status.nil?
 
         return status
@@ -92,20 +102,26 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
     end
   end
 
+  # On an unexpected result, surface the child's own boot log (the banner records
+  # Debug ON/OFF) so a CI failure localizes env-not-applied vs a dispatch bug.
+  def diag
+    "\n--- child diagnostic ---\n#{@last_diag.inspect}\n--- child serve.log ---\n#{@last_diag && @last_diag[:log]}"
+  end
+
   it "serve honours debug false from env file" do
-    expect(dev_status("TINA4_DEBUG=false\n")).to eq(404)
+    expect(dev_status("TINA4_DEBUG=false\n")).to(eq(404), diag)
   end
 
   it "serve honours debug true from env file" do
     # Control: proves the /__dev probe can tell debug-on from debug-off.
-    expect(dev_status("TINA4_DEBUG=true\n")).not_to eq(404)
+    expect(dev_status("TINA4_DEBUG=true\n")).not_to(eq(404), diag)
   end
 
   it "production flag turns debug off" do
-    expect(dev_status("TINA4_DEBUG=true\n", "--production")).to eq(404)
+    expect(dev_status("TINA4_DEBUG=true\n", "--production")).to(eq(404), diag)
   end
 
   it "a missing env file does not enable debug" do
-    expect(dev_status(nil)).to eq(404)
+    expect(dev_status(nil)).to(eq(404), diag)
   end
 end
