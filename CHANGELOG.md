@@ -6,6 +6,10 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.143 — 2026-10-01
+
+A fresh project's own styling now loads under the strict default Content-Security-Policy. The framework serves `default-src 'self'`, which a browser enforces by refusing every inline `<style>` and `<script>` -- so a new project rendered unstyled with its scripts blocked. The framework now mints one nonce per response, injects it into the `style-src` and `script-src` directives, and stamps it on every inline block it emits, de-inlining the `style=` and `on*=` attributes it used to rely on; a template that needs an inline block stamps `csp_nonce()` on it (ADR-0088, #96). A session's expiry now slides on activity: a read-only request that touched a stored session re-writes the merged record to move the deadline forward, so a request in flight next to a logout no longer loses the wrong state (ADR-0087, #94). Internally, the serve-debug readiness probe is identity-guarded so a foreign server on a reused ephemeral port can no longer be mistaken for the child under test -- a continuous-integration flake fix with no runtime change (#95). The framework still has no required runtime dependencies.
+
 ## 3.13.142 — 2026-09-30
 
 A release led by real fixes for anyone on WebSockets, sessions, or the gallery queue, then a round of internal tidying and a new metrics gate that holds the line on complexity. The framework still carries no required runtime dependencies.
