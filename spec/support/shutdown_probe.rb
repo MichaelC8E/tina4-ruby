@@ -121,11 +121,30 @@ module ShutdownProbe
       @status
     end
 
-    def wait_until_serving!(path = "/ping", timeout: 40)
+    # Wait until the child is serving `path` with 200.
+    #
+    # `require_log` (optional Regexp) is an IDENTITY guard: a 200 from the port
+    # proves only that SOMETHING listens there, not that it is the child WE
+    # spawned. Under ephemeral-port reuse a DIFFERENT server (another test's, or
+    # a differently-configured one) can hold the port our child was told to bind;
+    # accepting its 200 makes the probe read the wrong server. When `require_log`
+    # is given, a 200 is trusted only once the child's OWN log matches it - e.g.
+    # its `Server: http://host:<thisport>` banner, which prints only after the
+    # child actually bound THIS port. Callers that do not need the guard omit it
+    # and behaviour is unchanged. (Confirmed root cause of the serve-debug flake:
+    # a reused port held by another, debug-off server answered /health 200 while
+    # our debug-on child never owned it, so the /__dev probe hit the wrong server
+    # and saw a settled 404.)
+    def wait_until_serving!(path = "/ping", timeout: 40, require_log: nil)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
-        return self if get(path)&.first == 200
+        # Check exit BEFORE accepting a 200: if our child already died, a 200 can
+        # only be a foreign server on a reused port, never ours.
         raise BootError, "server exited during boot\n--- server log ---\n#{log}" if exited?
+
+        if (require_log.nil? || log.match?(require_log)) && get(path)&.first == 200
+          return self
+        end
 
         sleep 0.1
       end

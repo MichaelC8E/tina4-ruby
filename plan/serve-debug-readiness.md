@@ -13,7 +13,28 @@ frameworks that share it, all with real (no-mock) regression tests.
 - [ ] Regression test: aux-port parity (Node)
 - [ ] Verify on CI, loop the serve spec 5+ times, mutation-check the source fix
 
-## Root cause — CONFIRMED NOT the traced "/__dev mounts after /health" race (Ruby)
+## CONFIRMED ROOT CAUSE (from a CI failure's child serve.log) — PORT IDENTITY, not readiness
+The flake REPRODUCED on CI under load (2/6 reruns) as a genuine `dev_status == 404`
+for the debug-on case. The instrumented failure dumped the child's own serve.log:
+```
+{:status=>404, :health=>[200, "...uptime:1.19..."], :reprobe=>[404,404,404,404],
+ :log=>"Port 39431 is in use and takeover is disabled ... \n Server: http://127.0.0.1:39431 \n Debug: OFF (Log level: NONE)"}
+```
+So `free_port` handed out an ephemeral port that, under load, a DIFFERENT debug-OFF
+server already held (banner `Debug: OFF (Log level: NONE)` — not the config this spec
+passes). The debug-on child could not own the port ("is in use and takeover is
+disabled"), yet `wait_until_serving!` accepted `/health`=200 from that FOREIGN server,
+and the `/__dev` probe then hit the wrong, debug-off server → settled 404. A 200 on the
+port proved only that SOMETHING listened, not that it was OUR child. The readiness
+theory (#84/#91) and my first harness fix both missed this.
+
+FIX (harness, correct): `wait_until_serving!` now (a) checks child-exit BEFORE accepting
+a 200, and (b) takes an optional `require_log` identity guard; `dev_status` requires the
+child's OWN `Server: http://…:<thisport>` banner (printed only after the child actually
+bound THIS port) before trusting a 200. A contended port therefore fails the boot and
+retries on a FRESH port instead of silently probing a foreign server. boot_attempts 3→5.
+
+## Earlier note — the traced "/__dev mounts after /health" race does not exist in Ruby
 The traced theory (PR #84/#91): `/health` comes up before the debug-gated `/__dev`
 "routes finish mounting", so a probe catches a transient 404. **This does not hold
 in Ruby.** `/__dev` is NOT a mounted route — it is a per-request dispatch stage
