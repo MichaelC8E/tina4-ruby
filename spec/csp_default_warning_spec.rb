@@ -88,8 +88,12 @@ RSpec.describe "Default-CSP warn-once" do
     request
     request
     expect(mark_count).to eq(1), "the default-CSP warning must fire exactly once"
-    # Behaviour unchanged: the header is still the secure default.
-    expect(headers["content-security-policy"]).to eq("default-src 'self'")
+    # Behaviour unchanged: still the secure default — now with a per-response
+    # nonce in style-src/script-src (ADR-0088).
+    csp = headers["content-security-policy"]
+    expect(csp).to start_with("default-src 'self'")
+    expect(csp).to include("style-src 'self' 'nonce-")
+    expect(csp).to include("script-src 'self' 'nonce-")
   end
 
   it "set csp does not warn" do
@@ -97,6 +101,11 @@ RSpec.describe "Default-CSP warn-once" do
     reset_ledger
     headers = request
     expect(mark_count).to eq(0), "setting TINA4_CSP is an opt-in and must not warn"
-    expect(headers["content-security-policy"]).to eq("default-src 'self' https://api.example")
+    # The user policy is honoured and the framework's nonce is added to
+    # style-src/script-src so its own inline content still runs (ADR-0088).
+    csp = headers["content-security-policy"]
+    expect(csp).to start_with("default-src 'self' https://api.example")
+    expect(csp).to include("style-src 'self' https://api.example 'nonce-")
+    expect(csp).to include("script-src 'self' https://api.example 'nonce-")
   end
 end

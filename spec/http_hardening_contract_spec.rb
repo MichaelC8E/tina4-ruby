@@ -388,7 +388,12 @@ RSpec.describe "HTTP hardening contract (ADR-0068)" do
       expect(h.call("Connection")).to eq("close")
       expect(h.call("X-Frame-Options")).to eq("SAMEORIGIN")
       expect(h.call("X-Content-Type-Options")).to eq("nosniff")
-      expect(h.call("Content-Security-Policy")).to eq("default-src 'self'")
+      # ADR-0088: the CSP carries a per-response nonce in style-src/script-src,
+      # so it is never byte-equal. Assert the structure.
+      csp = h.call("Content-Security-Policy")
+      expect(csp).to include("default-src 'self'")
+      expect(csp.scan("'nonce-").length).to be >= 2, "CSP carries no nonce: #{csp}"
+      expect(csp).not_to include("'unsafe-inline'")
       expect(h.call("Referrer-Policy")).to eq("strict-origin-when-cross-origin")
       expect(h.call("X-XSS-Protection")).to eq("0")
       expect(h.call("Permissions-Policy")).to eq("camera=(), microphone=(), geolocation=()")

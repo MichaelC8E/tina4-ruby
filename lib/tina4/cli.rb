@@ -2749,7 +2749,11 @@ module Tina4
           {% extends "base.twig" %}
           {% block title %}Login{% endblock %}
           {% block content %}
-          <div class="container mt-4" style="max-width:400px">
+          {# No inline style attribute: a nonce lets this style block run under the
+             strict default Content-Security-Policy. csp_nonce() is a built-in
+             Frond global that returns this response's nonce. #}
+          <style nonce="{{ csp_nonce() }}">.auth-form{max-width:400px;margin:0 auto}</style>
+          <div class="container mt-4 auth-form">
               <h1>Login</h1>
               <form method="post" action="/api/auth/login">
                   {{ form_token() }}
@@ -2777,7 +2781,8 @@ module Tina4
           {% extends "base.twig" %}
           {% block title %}Register{% endblock %}
           {% block content %}
-          <div class="container mt-4" style="max-width:400px">
+          <style nonce="{{ csp_nonce() }}">.auth-form{max-width:400px;margin:0 auto}</style>
+          <div class="container mt-4 auth-form">
               <h1>Register</h1>
               <form method="post" action="/api/auth/register">
                   {{ form_token() }}

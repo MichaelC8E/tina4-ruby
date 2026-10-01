@@ -805,7 +805,14 @@ module Tina4
         [
           ["X-Frame-Options", ENV["TINA4_FRAME_OPTIONS"] || "SAMEORIGIN"],
           ["X-Content-Type-Options", "nosniff"],
-          ["Content-Security-Policy", ENV["TINA4_CSP"] || "default-src 'self'"],
+          # ADR-0088: always name a per-response nonce in style-src AND script-src
+          # so the framework's own inline <style>/<script> (and app templates using
+          # the Frond csp_nonce() global) run under the strict policy without ever
+          # adding 'unsafe-inline'. Derives style-src/script-src from default-src /
+          # 'self' when TINA4_CSP omits them. The value comes from the request
+          # thread-local so it matches the nonce the HTML body stamps on its inline
+          # elements.
+          ["Content-Security-Policy", Tina4::Csp.resolve_csp_header(Tina4::Csp.current_nonce)],
           ["Referrer-Policy", ENV["TINA4_REFERRER_POLICY"] || "strict-origin-when-cross-origin"],
           ["X-XSS-Protection", "0"],
           ["Permissions-Policy", ENV["TINA4_PERMISSIONS_POLICY"] || "camera=(), microphone=(), geolocation=()"]
@@ -847,11 +854,14 @@ module Tina4
 
         @csp_default_warned = true
         message = "TINA4_CSP is not set, so Tina4 is serving the default Content-Security-Policy " \
-          "\"default-src 'self'\" on every response. That default blocks runtime-injected " \
-          "inline styles, cross-origin fonts/scripts/CDNs, data: URIs, and cross-origin " \
-          "WebSocket/XHR (e.g. a separate API or LiveKit host). If your app uses any of " \
-          "these, set TINA4_CSP to a policy that allows them (see https://tina4.com); to " \
-          "silence this notice without changing behaviour, set TINA4_CSP=\"default-src 'self'\"."
+          "\"default-src 'self'\" on every response. The framework injects a per-response " \
+          "nonce into style-src and script-src, so its own inline <style>/<script> (and " \
+          "your templates using the csp_nonce() Frond global) work under this policy. The " \
+          "default still blocks cross-origin fonts/scripts/CDNs, data: URIs, and " \
+          "cross-origin WebSocket/XHR (e.g. a separate API or LiveKit host). If your app " \
+          "uses any of these, set TINA4_CSP to a policy that allows them (see " \
+          "https://tina4.com); to silence this notice without changing behaviour, set " \
+          "TINA4_CSP=\"default-src 'self'\"."
         begin
           Tina4::Log.warning(message)
         rescue StandardError

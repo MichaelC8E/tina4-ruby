@@ -1205,19 +1205,25 @@ module Tina4
     private
 
     def graphiql_html(endpoint)
+      # ADR-0088: no inline style= attribute, and the inline bootstrap <script>
+      # carries this response's CSP nonce. The cross-origin GraphiQL CDN assets
+      # still need TINA4_CSP to list unpkg.com (the default 'self' blocks them),
+      # same as the swagger UI — this is a dev-only playground.
+      nonce = Tina4::Csp.current_nonce
       <<~HTML
         <!DOCTYPE html>
         <html>
         <head>
           <title>GraphiQL — Tina4 Ruby</title>
           <link rel="stylesheet" href="https://unpkg.com/graphiql@3/graphiql.min.css" />
+          <style nonce="#{nonce}">body{margin:0;height:100vh}#graphiql{height:100vh}</style>
         </head>
-        <body style="margin:0;height:100vh;">
-          <div id="graphiql" style="height:100vh;"></div>
+        <body>
+          <div id="graphiql"></div>
           <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
           <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
           <script crossorigin src="https://unpkg.com/graphiql@3/graphiql.min.js"></script>
-          <script>
+          <script nonce="#{nonce}">
             const fetcher = GraphiQL.createFetcher({ url: '#{endpoint}' });
             ReactDOM.createRoot(document.getElementById('graphiql'))
               .render(React.createElement(GraphiQL, { fetcher }));
