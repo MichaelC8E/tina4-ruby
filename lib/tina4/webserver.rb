@@ -126,33 +126,9 @@ module Tina4
       # drains in-flight requests (bounded by TINA4_SHUTDOWN_TIMEOUT).
       Tina4::Shutdown.setup(server: @server)
 
-      # Test port (port + 1000) — stable, no-browser
-      no_ai_port = %w[true 1 yes].include?(ENV.fetch("TINA4_NO_AI_PORT", "").downcase)
-      is_debug   = %w[true 1 yes].include?(ENV.fetch("TINA4_DEBUG", "").downcase)
-
-      if is_debug && !no_ai_port
-        ai_port = @port + 1000
-        begin
-          # Tagged so the pipeline suppresses live reload on this port.
-          @server.listen(@host, ai_port, Tina4::AiPortRackApp.new(@app))
-          puts "  Test Port: http://localhost:#{ai_port} (stable — no hot-reload)"
-        rescue Errno::EADDRINUSE
-          puts "  Test Port: SKIPPED (port #{ai_port} in use)"
-        rescue SocketError, SystemCallError => e
-          # The auxiliary AI/test port is a debug CONVENIENCE, never
-          # load-bearing. Its bind must DEGRADE to no-aux-port, never crash the
-          # main server the operator actually asked for. The old rescue caught
-          # only Errno::EADDRINUSE, so any OTHER bind failure propagated out of
-          # #start and killed the whole boot: a transient
-          # getaddrinfo/Socket::ResolutionError on a fresh host under process
-          # churn (a measured macOS artifact), Errno::EADDRNOTAVAIL, Errno::EACCES.
-          # Catch the broad bind-failure set (SocketError covers
-          # Socket::ResolutionError; SystemCallError covers every Errno::*), log
-          # LOUD so it is never silent, and carry on main-port only.
-          Tina4::Log.error("Test Port: SKIPPED — auxiliary port #{ai_port} bind failed (#{e.class}: #{e.message})")
-          puts "  Test Port: SKIPPED (#{e.class})"
-        end
-      end
+      # Test port (port + 1000) — stable, no-browser. Extracted so its bind
+      # rescue stays out of #start's cyclomatic complexity.
+      bind_auxiliary_ai_port
 
       @server.start
 
@@ -167,6 +143,33 @@ module Tina4
       @server&.shutdown
       # Drop our identity marker so a later takeover does not match a dead PID.
       Tina4::PortTakeover.remove_pidfile(@port)
+    end
+
+    # Bind the auxiliary AI/test port (main port + 1000), a debug-only, stable,
+    # no-hot-reload sibling of the main port. It is a CONVENIENCE, never
+    # load-bearing: any bind failure here must DEGRADE to no-aux-port and leave
+    # the main server the operator asked for untouched. The rescue used to catch
+    # only Errno::EADDRINUSE, so any OTHER bind failure propagated out of #start
+    # and crashed the whole boot: a transient getaddrinfo/Socket::ResolutionError
+    # on a fresh host under process churn (a measured macOS artifact),
+    # Errno::EADDRNOTAVAIL, Errno::EACCES. Catch the broad bind-failure set
+    # (SocketError covers Socket::ResolutionError; SystemCallError covers every
+    # Errno::*), log LOUD so it is never silent, and carry on main-port only.
+    # Parity with Python (`except OSError`) and PHP (`\Throwable`).
+    def bind_auxiliary_ai_port
+      no_ai_port = %w[true 1 yes].include?(ENV.fetch("TINA4_NO_AI_PORT", "").downcase)
+      is_debug   = %w[true 1 yes].include?(ENV.fetch("TINA4_DEBUG", "").downcase)
+      return unless is_debug && !no_ai_port
+
+      ai_port = @port + 1000
+      # Tagged so the pipeline suppresses live reload on this port.
+      @server.listen(@host, ai_port, Tina4::AiPortRackApp.new(@app))
+      puts "  Test Port: http://localhost:#{ai_port} (stable — no hot-reload)"
+    rescue Errno::EADDRINUSE
+      puts "  Test Port: SKIPPED (port #{ai_port} in use)"
+    rescue SocketError, SystemCallError => e
+      Tina4::Log.error("Test Port: SKIPPED — auxiliary port #{ai_port} bind failed (#{e.class}: #{e.message})")
+      puts "  Test Port: SKIPPED (#{e.class})"
     end
 
     # Dispatch a Rack-style env through the Tina4 app and return [status, headers, body].
