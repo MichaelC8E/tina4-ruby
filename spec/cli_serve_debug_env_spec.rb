@@ -49,7 +49,7 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
     # The debug assertion itself is never retried - poll_status runs only once
     # the child is serving, and its result is returned as-is. A server that
     # genuinely never boots still raises after the attempts are spent.
-    boot_attempts = 3
+    boot_attempts = 5
     boot_attempts.times do |attempt|
       dir = Dir.mktmpdir("tina4_serve")
       FileUtils.mkdir_p(File.join(dir, "src", "routes"))
@@ -58,24 +58,40 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
       log = File.join(dir, "serve.log")
       pid = Process.spawn(env, RbConfig.ruby, "-I", lib, exe, "serve", "-p", port.to_s, "-h", "127.0.0.1",
                           "--no-browser", *flags, chdir: dir, out: log, err: log, pgroup: true)
-      # /health is mounted regardless of debug, so a 200 there proves the child
-      # bound its socket - but it comes up BEFORE the debug-gated /__dev routes
-      # finish mounting. #84 probed /__dev exactly ONCE right after /health,
-      # which is the wrong readiness signal: when debug is on, at the instant
-      # /health returns 200 the /__dev route may not be registered yet, so that
-      # single probe can catch a transient "not mounted yet" 404 and mistake it
-      # for the answer - failing the "debug on" control. The cure is to wait for
-      # /health (the child is up) and then POLL /__dev over a bounded window:
-      # poll_status returns the first non-404 the instant debug-on mounts the
-      # route (race killed), and returns a settled 404 only after debug-off has
-      # kept it absent for the whole window (a genuine "debug is off" answer).
-      # Neither assertion is weakened - the two "debug on" cases wait for the
-      # route to actually mount, the two "debug off"/production cases still
-      # return 404 by outlasting the window.
+      # ROOT CAUSE of the recurring flake (confirmed from a CI failure's child
+      # serve.log): NOT a /__dev readiness race. /__dev is gated on
+      # ENV["TINA4_DEBUG"], loaded before the socket accepts, so a dispatching
+      # server answers /__dev correctly at once. The flake was a PORT-IDENTITY
+      # bug: free_port hands out an ephemeral port, and under load a DIFFERENT,
+      # debug-off server held it by the time our debug-on child tried to bind.
+      # The child could not own the port (logged "is in use and takeover is
+      # disabled"), yet wait_until_serving! accepted /health=200 from that
+      # foreign server and the /__dev probe then hit the wrong, debug-off server
+      # and saw a settled 404. The failing child's own banner proved it:
+      # "Debug: OFF (Log level: NONE)" - not the config THIS spec passes.
+      #
+      # Fix: require the child's OWN "Server: http://...:<thisport>" banner (it
+      # prints only after the child actually bound THIS port) before trusting a
+      # /health 200, and check child-exit first. A contended port therefore
+      # fails the boot and retries on a FRESH port instead of silently probing a
+      # foreign server. Then poll /__dev: debug-on returns non-404 at once,
+      # debug-off a settled 404 - neither assertion weakened.
+      own_server = %r{Server:\s+http://[^\s]*:#{port}\b}
       server = ShutdownProbe::Server.new(pid, port, dir, log)
       begin
-        server.wait_until_serving!("/health", timeout: 30)
+        server.wait_until_serving!("/health", timeout: 30, require_log: own_server)
         status = server.poll_status("/__dev")
+        # Capture a full diagnostic BEFORE destroy! removes the temp project, so
+        # an unexpected result (the historical flake) fails with the child's own
+        # boot log instead of a bare status code. The banner records Debug ON/OFF,
+        # which decides env-not-applied vs a dispatch bug at a glance.
+        @last_diag = {
+          status: status, port: port, attempt: attempt,
+          child_alive: !server.exited?,
+          health: server.get("/health"),
+          reprobe: Array.new(4) { server.get("/__dev")&.first },
+          log: server.log
+        }
         raise "serve never answered /__dev: #{server.log}" if status.nil?
 
         return status
@@ -92,20 +108,26 @@ RSpec.describe "tina4ruby serve debug is explicit (ADR-0079)" do
     end
   end
 
+  # On an unexpected result, surface the child's own boot log (the banner records
+  # Debug ON/OFF) so a CI failure localizes env-not-applied vs a dispatch bug.
+  def diag
+    "\n--- child diagnostic ---\n#{@last_diag.inspect}\n--- child serve.log ---\n#{@last_diag && @last_diag[:log]}"
+  end
+
   it "serve honours debug false from env file" do
-    expect(dev_status("TINA4_DEBUG=false\n")).to eq(404)
+    expect(dev_status("TINA4_DEBUG=false\n")).to(eq(404), diag)
   end
 
   it "serve honours debug true from env file" do
     # Control: proves the /__dev probe can tell debug-on from debug-off.
-    expect(dev_status("TINA4_DEBUG=true\n")).not_to eq(404)
+    expect(dev_status("TINA4_DEBUG=true\n")).not_to(eq(404), diag)
   end
 
   it "production flag turns debug off" do
-    expect(dev_status("TINA4_DEBUG=true\n", "--production")).to eq(404)
+    expect(dev_status("TINA4_DEBUG=true\n", "--production")).to(eq(404), diag)
   end
 
   it "a missing env file does not enable debug" do
-    expect(dev_status(nil)).to eq(404)
+    expect(dev_status(nil)).to(eq(404), diag)
   end
 end
