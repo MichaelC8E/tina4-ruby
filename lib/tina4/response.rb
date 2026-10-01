@@ -63,7 +63,7 @@ module Tina4
     TEXT_CONTENT_TYPE = "text/plain; charset=utf-8"
     XML_CONTENT_TYPE  = "application/xml; charset=utf-8"
 
-    attr_accessor :status_code, :headers, :body, :cookies
+    attr_accessor :status_code, :headers, :body, :cookies, :csp_nonce
 
     # ADR-0068: a header name must be an RFC 9110 token, and a header value,
     # redirect location or cookie attribute may never carry CR, LF or NUL (a
@@ -89,6 +89,11 @@ module Tina4
       @body = ""
       @cookies = nil  # Lazy -- most responses have no cookies
       @content_type_from_header = false
+      # Per-response CSP nonce (ADR-0088). RackApp#call mints one per request on
+      # the thread-local, so every Response built during that request reads the
+      # SAME value the security middleware names in the Content-Security-Policy
+      # header and the framework's inline <style>/<script> stamp on themselves.
+      @csp_nonce = Tina4::Csp.current_nonce
     end
 
     # Chainable status setter

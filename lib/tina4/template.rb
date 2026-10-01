@@ -56,7 +56,11 @@ module Tina4
       end
 
       def globals
-        @globals ||= {}
+        # csp_nonce() is a built-in template global (ADR-0088): a template can
+        # stamp the current response's CSP nonce on an inline <style>/<script>
+        # — <style nonce="{{ csp_nonce() }}">. Matches the Frond engine global
+        # and the value the security middleware names in the CSP header.
+        @globals ||= { "csp_nonce" => -> { Tina4::Csp.current_nonce } }
       end
 
       def add_global(key, value)
@@ -87,7 +91,11 @@ module Tina4
         error_dirs = TEMPLATE_DIRS.map { |d| File.join(Dir.pwd, d, "errors") }
         error_dirs << File.join(File.dirname(__FILE__), "templates", "errors")
 
-        context = { "code" => code }.merge(data.transform_keys(&:to_s))
+        # csp_nonce() (ADR-0088) so the error twigs can carry a nonce on their
+        # inline <style>; render_error builds its own context and does not merge
+        # globals, so inject it here explicitly.
+        context = { "code" => code, "csp_nonce" => -> { Tina4::Csp.current_nonce } }
+                  .merge(data.transform_keys(&:to_s))
 
         error_dirs.each do |dir|
           %w[.twig .html .erb].each do |ext|
@@ -152,7 +160,7 @@ module Tina4
 
       def error_overlay_css(color)
         <<~CSS
-          <style>
+          <style nonce="#{Tina4::Csp.current_nonce}">
           * { box-sizing: border-box; margin: 0; padding: 0; }
           body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
           .error-card { background: #1e293b; border: 1px solid #334155; border-radius: 1rem; padding: 3rem; text-align: center; max-width: 520px; width: 90%; }

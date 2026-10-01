@@ -606,6 +606,18 @@ engine.clear_cache
 - **SafeString**: Custom filters can return a SafeString to bypass auto-HTML-escaping.
 - **Fragment caching**: `{% cache "key" 300 %}...{% endcache %}` caches rendered block content for TTL seconds.
 - **Raw blocks**: `{% raw %}...{% endraw %}` outputs literal template syntax without parsing.
+- **CSP nonce global** `{{ csp_nonce() }}` (ADR-0088): the current response's
+  Content-Security-Policy nonce. Tina4 serves a strict default CSP
+  (`default-src 'self'`); a browser refuses any inline `<style>`/`<script>` under
+  it unless the element carries a nonce the CSP header also names. The framework
+  mints one nonce per response, injects `'nonce-<X>'` into `style-src` and
+  `script-src`, and exposes the value here (and on `response.csp_nonce`), so a
+  template serves inline content the same way:
+  `<style nonce="{{ csp_nonce() }}">…</style>` /
+  `<script nonce="{{ csp_nonce() }}">…</script>`. A nonce covers a `<style>`/
+  `<script>` ELEMENT only — never a `style="…"` or `on*="…"` ATTRIBUTE — so prefer
+  classes and `addEventListener`. An external `<script src>` / `<link rel=stylesheet>`
+  needs no nonce (same-origin `'self'` already allows it).
 
 ### QueryBuilder — Fluent query construction
 

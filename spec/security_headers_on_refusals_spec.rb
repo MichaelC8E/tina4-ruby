@@ -68,7 +68,11 @@ RSpec.describe "Security headers on middleware and auth refusals" do
   end
 
   def expect_security_headers(headers, what)
-    expect(headers["content-security-policy"]).to eq("default-src 'self'"), "#{what}: no CSP"
+    # ADR-0088: the CSP carries a per-response nonce in style-src/script-src, so
+    # assert its structure rather than a byte-equal string.
+    csp = headers["content-security-policy"]
+    expect(csp).to include("default-src 'self'"), "#{what}: no CSP"
+    expect(csp.scan("'nonce-").length).to be >= 2, "#{what}: CSP carries no nonce (#{csp})"
     expect(headers["x-content-type-options"]).to eq("nosniff"), "#{what}: no nosniff"
     expect(headers["x-frame-options"]).to eq("SAMEORIGIN"), "#{what}: no X-Frame-Options"
   end

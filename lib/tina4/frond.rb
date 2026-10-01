@@ -3184,6 +3184,13 @@ module Tina4
       # Both this global and the |dump filter call Frond.render_dump which
       # returns an empty SafeString in production so dump never leaks state.
       @globals["dump"] = ->(value = nil) { Frond.render_dump(value) }
+
+      # CSP nonce: {{ csp_nonce() }} returns the current response's nonce so a
+      # template can serve an inline <style>/<script> under the strict default
+      # Content-Security-Policy — <style nonce="{{ csp_nonce() }}">. The value
+      # matches the 'nonce-X' the security middleware puts in the CSP header
+      # (ADR-0088).
+      @globals["csp_nonce"] = -> { Tina4::Csp.current_nonce }
     end
 
     # Render a value as a pre-formatted inspect() wrapped in <pre> tags.

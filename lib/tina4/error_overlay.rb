@@ -86,7 +86,7 @@ module Tina4
         end
         hidden = backtrace.length - [backtrace.length, MAX_FRAMES].min
         if hidden.positive?
-          frames_html << "<div style=\"color:#{SUBTEXT};padding:8px 0;font-size:13px;\">" \
+          frames_html << "<div class=\"eo-hidden-frames\">" \
             "&#8230; #{hidden} more stack frames hidden (truncated at #{MAX_FRAMES})</div>"
         end
 
@@ -121,6 +121,10 @@ module Tina4
         env_section = collapsible("Environment", table(env_pairs))
         stack_section = collapsible("Stack Trace", frames_html, open_by_default: true)
 
+        # ADR-0088: one nonce'd <style> holds the whole overlay stylesheet; no
+        # element carries a style= attribute, because a nonce covers a <style>
+        # ELEMENT but never a style attribute. The value matches the CSP header.
+        nonce = Tina4::Csp.current_nonce
         <<~HTML
           <!DOCTYPE html>
           <html lang="en">
@@ -128,31 +132,69 @@ module Tina4
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width,initial-scale=1">
           <title>Tina4 Error — #{esc(exc_type)}</title>
-          <style>
-          *{margin:0;padding:0;box-sizing:border-box;}
-          body{background:#{BG};color:#{TEXT_COLOR};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}
+          <style nonce="#{nonce}">
+          #{overlay_stylesheet}
           </style>
           </head>
           <body>
-          <div style="max-width:960px;margin:0 auto;">
-            <div style="margin-bottom:24px;">
-              <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-                <span style="background:#{RED};color:#{BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;">Error</span>
-                <span style="color:#{SUBTEXT};font-size:14px;">Tina4 Debug Overlay</span>
+          <div class="eo-wrap">
+            <div class="eo-header">
+              <div class="eo-badge-row">
+                <span class="eo-badge">Error</span>
+                <span class="eo-sub">Tina4 Debug Overlay</span>
               </div>
-              <h1 style="color:#{RED};font-size:28px;font-weight:700;margin-bottom:8px;">#{esc(exc_type)}</h1>
-              <p style="color:#{TEXT_COLOR};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:#{SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid #{RED};">#{esc(exc_msg)}</p>
+              <h1 class="eo-type">#{esc(exc_type)}</h1>
+              <p class="eo-msg">#{esc(exc_msg)}</p>
             </div>
             #{stack_section}
             #{request_section}
             #{env_section}
-            <div style="margin-top:32px;padding-top:16px;border-top:1px solid #{OVERLAY_COLOR};color:#{SUBTEXT};font-size:12px;">
+            <div class="eo-footer">
               Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG=false in production.
             </div>
           </div>
           </body>
           </html>
         HTML
+      end
+
+      # The overlay's full stylesheet, served inside one nonce'd <style> block.
+      # Keeping the rules here (not on the elements) is what makes the overlay
+      # CSP-clean: no framework page emits a style="..." attribute.
+      def overlay_stylesheet
+        <<~CSS
+          *{margin:0;padding:0;box-sizing:border-box;}
+          body{background:#{BG};color:#{TEXT_COLOR};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}
+          .eo-wrap{max-width:960px;margin:0 auto;}
+          .eo-header{margin-bottom:24px;}
+          .eo-badge-row{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+          .eo-badge{background:#{RED};color:#{BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;}
+          .eo-sub{color:#{SUBTEXT};font-size:14px;}
+          .eo-type{color:#{RED};font-size:28px;font-weight:700;margin-bottom:8px;}
+          .eo-msg{color:#{TEXT_COLOR};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:#{SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid #{RED};}
+          .eo-footer{margin-top:32px;padding-top:16px;border-top:1px solid #{OVERLAY_COLOR};color:#{SUBTEXT};font-size:12px;}
+          .eo-source{background:#{SURFACE};border-radius:6px;padding:12px;overflow-x:auto;font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;}
+          .eo-line{display:flex;padding:1px 0;}
+          .eo-line-err{background:#{ERROR_LINE_BG};}
+          .eo-ln{color:#{YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;}
+          .eo-marker{color:#{RED};width:1.2em;user-select:none;}
+          .eo-code{color:#{TEXT_COLOR};white-space:pre-wrap;tab-size:4;}
+          .eo-frame{margin-bottom:16px;}
+          .eo-frame-head{margin-bottom:4px;}
+          .eo-file{color:#{BLUE};}
+          .eo-sep{color:#{SUBTEXT};}
+          .eo-lineno{color:#{YELLOW};}
+          .eo-fn{color:#{GREEN};}
+          .eo-stale{background:#{PEACH};color:#{BG};padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;}
+          .eo-details{margin-top:16px;}
+          .eo-summary{cursor:pointer;color:#{LAVENDER};font-weight:600;font-size:15px;padding:8px 0;user-select:none;}
+          .eo-details-body{padding:8px 0;}
+          .eo-table{border-collapse:collapse;width:100%;}
+          .eo-key{color:#{PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;}
+          .eo-val{color:#{TEXT_COLOR};padding:4px 0;word-break:break-all;}
+          .eo-none{color:#{SUBTEXT};}
+          .eo-hidden-frames{color:#{SUBTEXT};padding:8px 0;font-size:13px;}
+        CSS
       end
 
       # Return true if TINA4_DEBUG is enabled.
@@ -205,30 +247,28 @@ module Tina4
         return "" if lines.empty?
 
         rows = lines.map do |num, text, is_error|
-          bg = is_error ? "background:#{ERROR_LINE_BG};" : ""
+          row_class = is_error ? "eo-line eo-line-err" : "eo-line"
           marker = is_error ? "&#x25b6;" : " "
-          "<div style=\"#{bg}display:flex;padding:1px 0;\">" \
-            "<span style=\"color:#{YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;\">#{num}</span>" \
-            "<span style=\"color:#{RED};width:1.2em;user-select:none;\">#{marker}</span>" \
-            "<span style=\"color:#{TEXT_COLOR};white-space:pre-wrap;tab-size:4;\">#{esc(text)}</span>" \
+          "<div class=\"#{row_class}\">" \
+            "<span class=\"eo-ln\">#{num}</span>" \
+            "<span class=\"eo-marker\">#{marker}</span>" \
+            "<span class=\"eo-code\">#{esc(text)}</span>" \
             "</div>"
         end.join("\n")
 
-        "<div style=\"background:#{SURFACE};border-radius:6px;padding:12px;overflow-x:auto;" \
-          "font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;\">" \
-          "#{rows}</div>"
+        "<div class=\"eo-source\">#{rows}</div>"
       end
 
       def format_frame(filename, lineno, func_name, captured_at: 0.0)
         source = (filename && lineno.positive?) ? format_source_block(filename, lineno) : ""
         stale_badge = stale_file_badge(filename, captured_at)
-        "<div style=\"margin-bottom:16px;\">" \
-          "<div style=\"margin-bottom:4px;\">" \
-          "<span style=\"color:#{BLUE};\">#{esc(filename.to_s)}</span>" \
-          "<span style=\"color:#{SUBTEXT};\"> : </span>" \
-          "<span style=\"color:#{YELLOW};\">#{lineno}</span>" \
-          "<span style=\"color:#{SUBTEXT};\"> in </span>" \
-          "<span style=\"color:#{GREEN};\">#{esc(func_name.to_s)}</span>" \
+        "<div class=\"eo-frame\">" \
+          "<div class=\"eo-frame-head\">" \
+          "<span class=\"eo-file\">#{esc(filename.to_s)}</span>" \
+          "<span class=\"eo-sep\"> : </span>" \
+          "<span class=\"eo-lineno\">#{lineno}</span>" \
+          "<span class=\"eo-sep\"> in </span>" \
+          "<span class=\"eo-fn\">#{esc(func_name.to_s)}</span>" \
           "#{stale_badge}" \
           "</div>" \
           "#{source}" \
@@ -247,8 +287,7 @@ module Tina4
         return "" if mtime <= captured_at + 0.5
 
         mtime_str = Time.at(mtime).utc.strftime("%H:%M:%S")
-        "<span style=\"background:#{PEACH};color:#{BG};padding:1px 8px;" \
-          "border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;\">" \
+        "<span class=\"eo-stale\">" \
           "FILE MODIFIED @ #{mtime_str} UTC &mdash; source may not match what failed" \
           "</span>"
       rescue StandardError
@@ -257,23 +296,22 @@ module Tina4
 
       def collapsible(title, content, open_by_default: false)
         open_attr = open_by_default ? " open" : ""
-        "<details style=\"margin-top:16px;\"#{open_attr}>" \
-          "<summary style=\"cursor:pointer;color:#{LAVENDER};font-weight:600;font-size:15px;" \
-          "padding:8px 0;user-select:none;\">#{esc(title)}</summary>" \
-          "<div style=\"padding:8px 0;\">#{content}</div>" \
+        "<details class=\"eo-details\"#{open_attr}>" \
+          "<summary class=\"eo-summary\">#{esc(title)}</summary>" \
+          "<div class=\"eo-details-body\">#{content}</div>" \
           "</details>"
       end
 
       def table(pairs)
-        return "<span style=\"color:#{SUBTEXT};\">None</span>" if pairs.empty?
+        return "<span class=\"eo-none\">None</span>" if pairs.empty?
 
         rows = pairs.map do |key, val|
           "<tr>" \
-            "<td style=\"color:#{PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;\">#{esc(key)}</td>" \
-            "<td style=\"color:#{TEXT_COLOR};padding:4px 0;word-break:break-all;\">#{esc(val)}</td>" \
+            "<td class=\"eo-key\">#{esc(key)}</td>" \
+            "<td class=\"eo-val\">#{esc(val)}</td>" \
             "</tr>"
         end.join
-        "<table style=\"border-collapse:collapse;width:100%;\">#{rows}</table>"
+        "<table class=\"eo-table\">#{rows}</table>"
       end
     end
   end

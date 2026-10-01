@@ -65,7 +65,7 @@ RSpec.describe Tina4::ErrorOverlay do
     it "omits request section when no request given" do
       html = described_class.render_error_overlay(make_exception)
       # Check that the collapsible summary for request is not rendered
-      expect(html).not_to include('user-select:none;">Request Details</summary>')
+      expect(html).not_to include('>Request Details</summary>')
     end
 
     it "contains the environment section" do

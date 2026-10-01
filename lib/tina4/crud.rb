@@ -126,8 +126,8 @@ module Tina4
           end
           if editable
             html += "<td>"
-            html += "<button class=\"btn btn-sm btn-primary me-1\" onclick=\"crudSave('#{table_name}', '#{pk_value}')\">Save</button>"
-            html += "<button class=\"btn btn-sm btn-danger\" onclick=\"crudDelete('#{table_name}', '#{pk_value}')\">Delete</button>"
+            html += "<button class=\"btn btn-sm btn-primary me-1\" data-crud-inline=\"save\" data-table=\"#{h(table_name)}\" data-id=\"#{h(pk_value)}\">Save</button>"
+            html += "<button class=\"btn btn-sm btn-danger\" data-crud-inline=\"delete\" data-table=\"#{h(table_name)}\" data-id=\"#{h(pk_value)}\">Delete</button>"
             html += "</td>"
           end
           html += "</tr>"
@@ -457,7 +457,7 @@ module Tina4
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>#{h(title)}</title>
           <link rel="stylesheet" href="/css/tina4.min.css">
-          <style>
+          <style nonce="#{Tina4::Csp.current_nonce}">
           .crud-container { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
           .crud-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
           .crud-search { max-width: 300px; }
@@ -491,7 +491,7 @@ module Tina4
                     class="form-control crud-search">
                   <button type="submit" class="btn btn-secondary">Search</button>
                 </form>
-                <button class="btn btn-primary" onclick="crudShowCreate()">+ New</button>
+                <button class="btn btn-primary" data-crud-action="create">+ New</button>
               </div>
             </div>
             <div class="crud-info">
@@ -526,8 +526,8 @@ module Tina4
               html += "<td>#{h(value)}</td>"
             end
             html += "<td>"
-            html += "<button class=\"btn btn-sm btn-primary me-1\" onclick=\"crudShowEdit(#{pk_value.is_a?(String) ? "'#{h(pk_value)}'" : pk_value})\">Edit</button>"
-            html += "<button class=\"btn btn-sm btn-danger\" onclick=\"crudShowDelete(#{pk_value.is_a?(String) ? "'#{h(pk_value)}'" : pk_value})\">Delete</button>"
+            html += "<button class=\"btn btn-sm btn-primary me-1\" data-crud-action=\"edit\" data-id=\"#{h(pk_value)}\">Edit</button>"
+            html += "<button class=\"btn btn-sm btn-danger\" data-crud-action=\"delete\" data-id=\"#{h(pk_value)}\">Delete</button>"
             html += "</td></tr>"
           end
         end
@@ -567,8 +567,8 @@ module Tina4
               <p>Are you sure you want to delete this record? This action cannot be undone.</p>
               <input type="hidden" id="delete-pk-value">
               <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="crudCloseModal('delete')">Cancel</button>
-                <button class="btn btn-danger" onclick="crudConfirmDelete()">Delete</button>
+                <button class="btn btn-secondary" data-crud-action="close" data-crud-modal="delete">Cancel</button>
+                <button class="btn btn-danger" data-crud-action="confirm-delete">Delete</button>
               </div>
             </div>
           </div>
@@ -586,7 +586,7 @@ module Tina4
         html = "<div class=\"modal-overlay\" id=\"modal-#{id}\">"
         html += "<div class=\"modal-box\">"
         html += "<h3>#{h(title)}</h3>"
-        html += "<form id=\"form-#{id}\" onsubmit=\"return false;\">"
+        html += "<form id=\"form-#{id}\" data-crud-form=\"1\">"
         html += "<input type=\"hidden\" id=\"#{id}-pk-value\" name=\"#{pk}\">" if edit
 
         columns.each do |col|
@@ -599,8 +599,8 @@ module Tina4
         end
 
         html += "<div class=\"modal-footer\">"
-        html += "<button type=\"button\" class=\"btn btn-secondary\" onclick=\"crudCloseModal('#{id}')\">Cancel</button>"
-        html += "<button type=\"button\" class=\"btn btn-primary\" onclick=\"crudSave#{edit ? 'Edit' : 'Create'}()\">Save</button>"
+        html += "<button type=\"button\" class=\"btn btn-secondary\" data-crud-action=\"close\" data-crud-modal=\"#{h(id)}\">Cancel</button>"
+        html += "<button type=\"button\" class=\"btn btn-primary\" data-crud-action=\"save\" data-crud-mode=\"#{edit ? 'edit' : 'create'}\">Save</button>"
         html += "</div></form></div></div>"
         html
       end
@@ -609,7 +609,7 @@ module Tina4
       def build_crud_javascript(api_path, pk, columns, request_path)
         columns_json = JSON.generate(columns.map(&:to_s))
         <<~HTML
-          <script>
+          <script nonce="#{Tina4::Csp.current_nonce}">
           var CRUD_API = '#{api_path}';
           var CRUD_PK = '#{pk}';
           var CRUD_COLUMNS = #{columns_json};
@@ -708,6 +708,37 @@ module Tina4
             .catch(function(e) { crudShowAlert('Failed to delete: ' + e, 'danger'); });
           }
 
+          // Replaces the modal forms' inline submit handler (a CSP-blocked on*=
+          // attribute): they post over fetch(), so stop the native submit here.
+          document.addEventListener('submit', function (event) {
+            if (event.target.closest('form[data-crud-form]')) {
+              event.preventDefault();
+            }
+          });
+
+          // CSP-clean action wiring: a nonce authorises this <script> element
+          // but never an inline on*= attribute, so every button carries
+          // data-crud-action and binds through one delegated listener.
+          document.addEventListener('click', function (event) {
+            var button = event.target.closest('[data-crud-action]');
+            if (!button) return;
+            var action = button.dataset.crudAction;
+            if (action === 'create') {
+              crudShowCreate();
+            } else if (action === 'edit') {
+              crudShowEdit(button.dataset.id);
+            } else if (action === 'delete') {
+              crudShowDelete(button.dataset.id);
+            } else if (action === 'close') {
+              crudCloseModal(button.dataset.crudModal);
+            } else if (action === 'confirm-delete') {
+              crudConfirmDelete();
+            } else if (action === 'save') {
+              if (button.dataset.crudMode === 'edit') { crudSaveEdit(); }
+              else { crudSaveCreate(); }
+            }
+          });
+
           // Close modal on overlay click
           document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
             overlay.addEventListener('click', function(e) {
@@ -729,7 +760,7 @@ module Tina4
 
       def inline_crud_javascript(table_name)
         <<~JS
-          <script>
+          <script nonce="#{Tina4::Csp.current_nonce}">
           function crudSave(table, id) {
             const row = document.querySelector(`tr[data-id="${id}"]`);
             const cells = row.querySelectorAll('td[data-field]');
@@ -748,6 +779,18 @@ module Tina4
               .then(d => { document.querySelector(`tr[data-id="${id}"]`).remove(); })
               .catch(e => alert('Error: ' + e));
           }
+          // CSP-clean wiring: a nonce authorises this <script> element but never
+          // an inline on*= attribute, so the Save/Delete buttons carry
+          // data-crud-inline + data-* and bind through one delegated listener.
+          document.addEventListener('click', function (event) {
+            var button = event.target.closest('[data-crud-inline]');
+            if (!button) return;
+            if (button.dataset.crudInline === 'save') {
+              crudSave(button.dataset.table, button.dataset.id);
+            } else if (button.dataset.crudInline === 'delete') {
+              crudDelete(button.dataset.table, button.dataset.id);
+            }
+          });
           </script>
         JS
       end

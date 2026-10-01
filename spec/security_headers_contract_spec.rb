@@ -39,15 +39,32 @@ require "stringio"
 RSpec.describe "Security headers conformance" do
   # The canonical set every framework emits, byte-identical values (compared
   # case-insensitively - HTTP header names are case-insensitive).
+  # content-security-policy is asserted separately via assert_default_csp: its
+  # value carries a per-response random nonce (ADR-0088), so it is never
+  # byte-equal across requests.
   let(:canonical) do
     {
       "x-frame-options" => "SAMEORIGIN",
       "x-content-type-options" => "nosniff",
-      "content-security-policy" => "default-src 'self'",
       "referrer-policy" => "strict-origin-when-cross-origin",
       "x-xss-protection" => "0",
       "permissions-policy" => "camera=(), microphone=(), geolocation=()"
     }
+  end
+
+  # The default CSP: default-src 'self' plus a nonce in style-src + script-src
+  # (ADR-0088). The nonce is random per request, so assert STRUCTURE, never a
+  # byte-equal string.
+  def assert_default_csp(value)
+    expect(value).not_to be_nil
+    expect(value).to include("default-src 'self'")
+    directives = value.split(";").map(&:strip).reject(&:empty?)
+                      .to_h { |d| [d.split(/\s+/, 2).first, d] }
+    %w[style-src script-src].each do |directive|
+      expect(directives).to have_key(directive), "#{directive} missing from CSP: #{value}"
+      expect(directives[directive]).to include("'nonce-"), "#{directive} carries no nonce: #{value}"
+    end
+    expect(value).not_to include("'unsafe-inline'"), "CSP must never use unsafe-inline: #{value}"
   end
   let(:hsts_value) { "31536000" }
 
@@ -97,6 +114,7 @@ RSpec.describe "Security headers conformance" do
       expect(headers[name]).to eq(value),
         "default app must emit #{name}: #{value} (SECHDR-OFF-BY-DEFAULT regression)"
     end
+    assert_default_csp(headers["content-security-policy"])
     # The middleware IS in the default chain - a real registration, not a
     # per-test hand-wire a real app would not do.
     expect(Tina4::Middleware.post_match_middleware).to include(Tina4::SecurityHeadersMiddleware)
@@ -104,8 +122,18 @@ RSpec.describe "Security headers conformance" do
     expect(headers["strict-transport-security"]).to be_nil
   end
 
-  it "csp defaults to default src self" do
-    expect(request["content-security-policy"]).to eq("default-src 'self'")
+  it "csp defaults to default src self with a per-response nonce" do
+    assert_default_csp(request["content-security-policy"])
+  end
+
+  it "each response gets a fresh csp nonce" do
+    first = request["content-security-policy"]
+    second = request["content-security-policy"]
+    n1 = first[/'nonce-([^']+)'/, 1]
+    n2 = second[/'nonce-([^']+)'/, 1]
+    expect(n1).not_to be_nil
+    expect(n2).not_to be_nil
+    expect(n1).not_to eq(n2), "nonce was reused across responses: #{n1}"
   end
 
   # ------------------------------------------------------- HSTS HTTPS-guarded

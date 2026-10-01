@@ -103,6 +103,11 @@ module Tina4
       # on the response whatever outcome the pipeline produced (200/404/500/413).
       request_id = Tina4::Log.sanitize_request_id(env["HTTP_X_REQUEST_ID"]) || SecureRandom.hex(4)
       Tina4::Log.set_request_id(request_id)
+      # One CSP nonce per request, published on the thread-local (ADR-0088) so the
+      # inline HTML body and the security middleware's CSP header name the SAME
+      # value. Cleared in `ensure`, exactly like the request id (an overlapping
+      # request on another thread never shares it).
+      Tina4::Csp.set_current_nonce(Tina4::Csp.generate_nonce)
 
       begin
         result = dispatch_pipeline(env)
@@ -112,8 +117,10 @@ module Tina4
         # The request pipeline installs the id before its first log and
         # clears it in `finally`/`ensure` after its last (Decision 12 /
         # LOG-Q03), so an overlapping request on another thread can never
-        # observe a stale id from a request that already finished.
+        # observe a stale id from a request that already finished. The CSP
+        # nonce has the same lifetime.
         Tina4::Log.clear_request_id
+        Tina4::Csp.clear_current_nonce
       end
     end
 
@@ -374,6 +381,10 @@ module Tina4
       # zero-dependency — no vendored ~1.4MB swagger-ui-dist). Air-gapped
       # deployments point TINA4_SWAGGER_UI_CDN at a self-hosted mirror.
       cdn = (ENV["TINA4_SWAGGER_UI_CDN"] || "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5").sub(%r{/+\z}, "")
+      # ADR-0088: nonce the inline bootstrap <script> so it runs under the strict
+      # default CSP. The external <script src>/<link> need none ('self' allows
+      # same-origin; a CDN still needs TINA4_CSP to list its host).
+      nonce = Tina4::Csp.current_nonce
       html = <<~HTML
         <!DOCTYPE html>
         <html lang="en">
@@ -385,7 +396,7 @@ module Tina4
         <body>
           <div id="swagger-ui"></div>
           <script src="#{cdn}/swagger-ui-bundle.js"></script>
-          <script>
+          <script nonce="#{nonce}">
             SwaggerUIBundle({ url: '/swagger/openapi.json', dom_id: '#swagger-ui' });
           </script>
         </body>
@@ -554,6 +565,12 @@ module Tina4
 
     def render_landing_page
       port = ENV["PORT"] || "7145"
+      # One CSP nonce for this response (ADR-0088): the <style>/<script> below
+      # carry it, and the security middleware names the SAME value in the CSP
+      # header. No inline style=/onclick= — a nonce covers a <style>/<script>
+      # ELEMENT but never a style or event-handler ATTRIBUTE, so every style
+      # lives in a class and every handler is bound with addEventListener.
+      nonce = Tina4::Csp.current_nonce
 
       # Check deployed state for each gallery item
       project_src = File.join(@root_dir, "src")
@@ -569,13 +586,13 @@ module Tina4
 
       gallery_cards = gallery_items.map do |item|
         deployed = File.file?(File.join(project_src, item[:file_check]))
-        deployed_badge = deployed ? '<span style="position:absolute;top:0.75rem;right:0.75rem;background:#22c55e;color:#fff;font-size:0.65rem;padding:0.15rem 0.5rem;border-radius:0.25rem;font-weight:600;">DEPLOYED</span>' : ''
+        deployed_badge = deployed ? '<span class="deployed-badge">DEPLOYED</span>' : ''
         try_btn = if deployed
                     %(<a href="#{item[:try_url]}" class="gbtn gbtn-try" target="_blank">Try It</a>)
                   else
-                    %(<button class="gbtn gbtn-deploy" onclick="deployGallery('#{item[:id]}','#{item[:try_url]}')">Deploy &amp; Try</button>)
+                    %(<button class="gbtn gbtn-deploy" data-gallery-deploy data-id="#{item[:id]}" data-try-url="#{item[:try_url]}">Deploy &amp; Try</button>)
                   end
-        view_btn = %(<button class="gbtn gbtn-view" onclick="viewGallery('#{item[:id]}')">View</button>)
+        view_btn = %(<button class="gbtn gbtn-view" data-gallery-view data-id="#{item[:id]}">View</button>)
 
         <<~CARD
           <div class="gallery-card">
@@ -584,7 +601,7 @@ module Tina4
               <div class="icon">#{item[:icon]}</div>
               <h3>#{item[:name]}</h3>
               <p>#{item[:desc]}</p>
-              <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">#{try_btn}#{view_btn}</div>
+              <div class="gallery-card-actions">#{try_btn}#{view_btn}</div>
           </div>
         CARD
       end.join
@@ -596,7 +613,7 @@ module Tina4
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Tina4Ruby</title>
-        <style>
+        <style nonce="#{nonce}">
         *{margin:0;padding:0;box-sizing:border-box}
         body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;position:relative}
         .bg-watermark{position:fixed;bottom:-5%;right:-5%;width:45%;opacity:0.04;pointer-events:none;z-index:0}
@@ -638,6 +655,21 @@ module Tina4
         .view-modal-close:hover{color:#e2e8f0}
         @keyframes wiggle{0%{transform:rotate(0deg)}15%{transform:rotate(14deg)}30%{transform:rotate(-10deg)}45%{transform:rotate(8deg)}60%{transform:rotate(-4deg)}75%{transform:rotate(2deg)}100%{transform:rotate(0deg)}}
         .star-wiggle{display:inline-block;transform-origin:center}
+        .tagline-sub{font-size:0.95rem;margin-top:-1rem}
+        .deployed-badge{position:absolute;top:0.75rem;right:0.75rem;background:#22c55e;color:#fff;font-size:0.65rem;padding:0.15rem 0.5rem;border-radius:0.25rem;font-weight:600}
+        .gallery-card-actions{display:flex;gap:0.5rem;margin-top:0.75rem}
+        .gallery-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+        .view-modal-title{margin-bottom:1rem;color:#e2e8f0}
+        .vm-intro{color:#94a3b8;margin-bottom:1rem}
+        .vm-file-list{list-style:none;padding:0}
+        .vm-file{padding:0.25rem 0;color:#4ade80;font-family:monospace;font-size:0.85rem}
+        .vm-tryurl{color:#94a3b8;margin-top:1rem}
+        .vm-code{color:#38bdf8}
+        .tok-comment{color:#64748b}
+        .tok-kw{color:#c084fc}
+        .tok-str{color:#4ade80}
+        .tok-fn{color:#38bdf8}
+        .tok-dec{color:#fbbf24}
         </style>
         </head>
         <body>
@@ -646,7 +678,7 @@ module Tina4
             <img src="/images/tina4-logo-icon.webp" class="logo" alt="Tina4">
             <h1>Tina4Ruby</h1>
             <p class="tagline">The Intelligent Native Application 4ramework</p>
-            <p class="tagline" style="font-size:0.95rem;margin-top:-1rem">Simple. Fast. Human. &nbsp;|&nbsp; Built for AI. Built for you.</p>
+            <p class="tagline tagline-sub">Simple. Fast. Human. &nbsp;|&nbsp; Built for AI. Built for you.</p>
             <div class="actions">
                 <a href="https://tina4.com/ruby" class="btn" target="_blank">Website</a>
                 <a href="/__dev" class="btn">Dev Admin</a>
@@ -664,33 +696,32 @@ module Tina4
         <div class="section">
             <div class="card">
                 <h2>Getting Started</h2>
-                <pre class="code-block"><code><span style="color:#64748b"># app.rb</span>
-        <span style="color:#c084fc">require</span> <span style="color:#4ade80">"tina4"</span>
+                <pre class="code-block"><code><span class="tok-comment"># app.rb</span>
+        <span class="tok-kw">require</span> <span class="tok-str">"tina4"</span>
 
-        Tina4::Router.<span style="color:#38bdf8">get</span>(<span style="color:#4ade80">"/hello"</span>) <span style="color:#c084fc">do</span> |request, response|
-          response.<span style="color:#38bdf8">json</span>({ <span style="color:#fbbf24">message:</span> <span style="color:#4ade80">"Hello World!"</span> })
-        <span style="color:#c084fc">end</span>
+        Tina4::Router.<span class="tok-fn">get</span>(<span class="tok-str">"/hello"</span>) <span class="tok-kw">do</span> |request, response|
+          response.<span class="tok-fn">json</span>({ <span class="tok-dec">message:</span> <span class="tok-str">"Hello World!"</span> })
+        <span class="tok-kw">end</span>
 
-        Tina4::WebServer.new(<span style="color:#fbbf24">port:</span> <span style="color:#38bdf8">7145</span>).start  <span style="color:#64748b"># starts on port 7145</span></code></pre>
+        Tina4::WebServer.new(<span class="tok-dec">port:</span> <span class="tok-fn">7145</span>).start  <span class="tok-comment"># starts on port 7145</span></code></pre>
             </div>
         </div>
         <div class="gallery">
             <h2 id="gallery">Gallery</h2>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;">
+            <div class="gallery-grid">
                 #{gallery_cards}
             </div>
         </div>
         <div class="view-modal" id="viewModal">
             <div class="view-modal-content">
-                <button class="view-modal-close" onclick="document.getElementById('viewModal').classList.remove('active')">&times;</button>
-                <h3 id="viewModalTitle" style="margin-bottom:1rem;color:#e2e8f0;"></h3>
+                <button class="view-modal-close" data-modal-close>&times;</button>
+                <h3 id="viewModalTitle" class="view-modal-title"></h3>
                 <div id="viewModalBody"></div>
             </div>
         </div>
-        <script>
-        function deployGallery(name, tryUrl) {
+        <script nonce="#{nonce}">
+        function deployGallery(btn, name, tryUrl) {
             if (!confirm('Deploy the "' + name + '" gallery example into your project?')) return;
-            var btn = event.target;
             btn.disabled = true;
             btn.textContent = 'Deploying...';
             fetch('/__dev/api/gallery/deploy', {
@@ -733,18 +764,34 @@ module Tina4
                 var title = document.getElementById('viewModalTitle');
                 var body = document.getElementById('viewModalBody');
                 title.textContent = item.name + ' — ' + item.description;
-                var html = '<p style="color:#94a3b8;margin-bottom:1rem;">Files that will be deployed:</p><ul style="list-style:none;padding:0;">';
+                var html = '<p class="vm-intro">Files that will be deployed:</p><ul class="vm-file-list">';
                 (item.files || []).forEach(function(f) {
-                    html += '<li style="padding:0.25rem 0;color:#4ade80;font-family:monospace;font-size:0.85rem;">src/' + f + '</li>';
+                    html += '<li class="vm-file">src/' + f + '</li>';
                 });
                 html += '</ul>';
                 if (item.try_url) {
-                    html += '<p style="color:#94a3b8;margin-top:1rem;">Try URL: <code style="color:#38bdf8;">' + item.try_url + '</code></p>';
+                    html += '<p class="vm-tryurl">Try URL: <code class="vm-code">' + item.try_url + '</code></p>';
                 }
                 body.innerHTML = html;
                 document.getElementById('viewModal').classList.add('active');
             });
         }
+        // CSP-clean wiring: no inline onclick handlers — bind every gallery
+        // button from its data-* attributes (a nonce covers script elements, not
+        // event-handler attributes).
+        document.querySelectorAll('[data-gallery-deploy]').forEach(function(btn){
+            btn.addEventListener('click', function(){
+                deployGallery(btn, btn.dataset.id, btn.dataset.tryUrl);
+            });
+        });
+        document.querySelectorAll('[data-gallery-view]').forEach(function(btn){
+            btn.addEventListener('click', function(){ viewGallery(btn.dataset.id); });
+        });
+        document.querySelectorAll('[data-modal-close]').forEach(function(btn){
+            btn.addEventListener('click', function(){
+                document.getElementById('viewModal').classList.remove('active');
+            });
+        });
         document.getElementById('viewModal').addEventListener('click', function(e) {
             if (e.target === this) this.classList.remove('active');
         });

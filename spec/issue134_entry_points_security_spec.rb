@@ -150,7 +150,9 @@ RSpec.describe "Issue #134: every server entry point sends security headers and 
 
           status, headers, = issue134_request(port, :get, "/issue134/page")
           expect(status).to eq(200)
-          expect(headers["content-security-policy"]).to eq("default-src 'self'")
+          # ADR-0088: CSP carries a per-response nonce; assert structure.
+          expect(headers["content-security-policy"]).to include("default-src 'self'")
+          expect(headers["content-security-policy"].scan("'nonce-").length).to be >= 2
           expect(headers["x-content-type-options"]).to eq("nosniff")
           expect(headers["x-frame-options"]).to eq("SAMEORIGIN")
 

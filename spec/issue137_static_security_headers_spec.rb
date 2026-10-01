@@ -107,7 +107,9 @@ RSpec.describe "Issue #137: static files carry the same security headers as rout
     expect(body).to include("<title>spa</title>")
     issue137_security_headers.each { |name| expect(headers).to have_key(name), "static /index.html is missing #{name}" }
     expect(headers["x-frame-options"]).to eq("SAMEORIGIN")
-    expect(headers["content-security-policy"]).to eq("default-src 'self'")
+    # ADR-0088: CSP carries a per-response nonce; assert structure not equality.
+    expect(headers["content-security-policy"]).to include("default-src 'self'")
+    expect(headers["content-security-policy"].scan("'nonce-").length).to be >= 2
   end
 
   it "the SPA front door ('/' -> index.html) is not frameable and has a CSP" do

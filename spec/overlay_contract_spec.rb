@@ -145,7 +145,7 @@ RSpec.describe "Error overlay contract (feature 126)" do
       end
 
     html = Tina4::ErrorOverlay.render_error_overlay(exc)
-    frame_blocks = html.scan('<div style="margin-bottom:16px;">').length
+    frame_blocks = html.scan('<div class="eo-frame">').length
     expect(frame_blocks).to be <= 50,
                             "frame count #{frame_blocks} exceeds the cap 50 — unbounded render"
     expect(html).to include("more stack frames hidden")

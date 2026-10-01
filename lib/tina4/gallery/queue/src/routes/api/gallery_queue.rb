@@ -67,7 +67,7 @@ GALLERY_QUEUE_HTML = <<~'HTML'
                 <div class="card-body">
                     <div class="d-flex gap-2">
                         <input type="text" id="msgInput" class="form-control" placeholder="Enter a task message, e.g. send-email">
-                        <button class="btn btn-primary" onclick="produce()">Produce</button>
+                        <button class="btn btn-primary" id="produceBtn">Produce</button>
                     </div>
                 </div>
             </div>
@@ -76,10 +76,10 @@ GALLERY_QUEUE_HTML = <<~'HTML'
             <div class="card">
                 <div class="card-header">Actions</div>
                 <div class="card-body d-flex gap-2 flex-wrap">
-                    <button class="btn btn-success" onclick="consume()">Consume Next</button>
-                    <button class="btn btn-danger" onclick="failNext()">Fail Next</button>
-                    <button class="btn btn-warning" onclick="retryFailed()">Retry Failed</button>
-                    <button class="btn btn-secondary" onclick="refresh()">Refresh</button>
+                    <button class="btn btn-success" id="consumeBtn">Consume Next</button>
+                    <button class="btn btn-danger" id="failBtn">Fail Next</button>
+                    <button class="btn btn-warning" id="retryBtn">Retry Failed</button>
+                    <button class="btn btn-secondary" id="refreshBtn">Refresh</button>
                 </div>
             </div>
         </div>
@@ -112,7 +112,7 @@ GALLERY_QUEUE_HTML = <<~'HTML'
     </div>
 </div>
 
-<script>
+<script nonce="__CSP_NONCE__">
 function statusBadge(status) {
     var colors = {pending:"primary", reserved:"warning", completed:"success", failed:"danger", dead:"secondary"};
     var color = colors[status] || "secondary";
@@ -122,7 +122,7 @@ function statusBadge(status) {
 function showAlert(msg, type) {
     var area = document.getElementById("alertArea");
     area.innerHTML = '<div class="alert alert-' + type + ' alert-dismissible">' + msg +
-        '<button type="button" class="btn-close" onclick="this.parentElement.remove()"></button></div>';
+        '<button type="button" class="btn-close js-alert-close"></button></div>';
     setTimeout(function(){ area.innerHTML = ""; }, 3000);
 }
 
@@ -196,6 +196,16 @@ async function retryFailed() {
     refresh();
 }
 
+// CSP-clean wiring: no inline onclick — bind every control via addEventListener.
+document.getElementById("produceBtn").addEventListener("click", produce);
+document.getElementById("consumeBtn").addEventListener("click", consume);
+document.getElementById("failBtn").addEventListener("click", failNext);
+document.getElementById("retryBtn").addEventListener("click", retryFailed);
+document.getElementById("refreshBtn").addEventListener("click", refresh);
+document.getElementById("alertArea").addEventListener("click", function(e){
+    if (e.target.classList.contains("js-alert-close")) e.target.parentElement.remove();
+});
+
 refresh();
 setInterval(refresh, 2000);
 </script>
@@ -206,7 +216,10 @@ HTML
 # ── Render the interactive HTML page ──────────────────────────
 
 Tina4::Router.get("/gallery/queue") do |request, response|
-  response.html(GALLERY_QUEUE_HTML)
+  # ADR-0088: stamp this response's CSP nonce on the inline <script> so it runs
+  # under the strict default policy (the HTML is a frozen, non-interpolated
+  # constant, so the nonce is substituted at serve time).
+  response.html(GALLERY_QUEUE_HTML.gsub("__CSP_NONCE__", response.csp_nonce))
 end
 
 # ── Produce — add a message to the queue ──────────────────────
