@@ -69,7 +69,7 @@ RSpec.describe "CSP nonce for framework inline content (ADR-0088)" do
 
   # Every inline <style>/<script> WITHOUT a src attribute must carry `nonce`.
   def assert_inline_tags_carry_nonce(body, nonce)
-    opens = body.scan(/<style\b([^>]*)>/) + body.scan(/<script\b([^>]*)>/)
+    opens = body.scan(/<style\b([^>]*)>/i) + body.scan(/<script\b([^>]*)>/i)
     opens.flatten.each do |attrs|
       next if attrs.include?("src=") # external script/link needs no nonce
       expect(attrs).to include(%(nonce="#{nonce}")), "inline tag <...#{attrs}> missing the header nonce"
@@ -140,8 +140,8 @@ RSpec.describe "CSP nonce for framework inline content (ADR-0088)" do
     # (like /swagger) so it carries no CSP header; when one IS present it must
     # name a nonce. Either way it emits zero inline attributes.
     assert_no_inline_attrs(body, "the dev admin page")
-    expect(body).not_to match(/<style\b[^>]*>/), "dev admin must not emit an inline <style>"
-    expect(body).not_to match(/<script\b(?![^>]*\bsrc=)[^>]*>/), "dev admin must not emit an inline <script>"
+    expect(body).not_to match(/<style\b[^>]*>/i), "dev admin must not emit an inline <style>"
+    expect(body).not_to match(/<script\b(?![^>]*\bsrc=)[^>]*>/i), "dev admin must not emit an inline <script>"
     csp = headers["content-security-policy"]
     expect(csp_nonce(csp)).not_to be_nil, "when /__dev sends a CSP it must name a nonce" unless csp.nil? || csp.empty?
   end
