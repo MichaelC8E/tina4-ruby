@@ -182,13 +182,12 @@ module Tina4
       @data.dup
     end
 
-    # Persist this request's changes if dirty. On a backend failure the error
-    # is logged and false is returned — the @modified (dirty) flag is RETAINED
-    # so a later save can retry. Returns true on a successful (or no-op) write.
+    # Persist this request's session. On a backend failure the error is logged
+    # and false is returned — the @modified (dirty) flag is RETAINED so a later
+    # save can retry. Returns true on a successful (or no-op) write.
     #
     # A cleared id (@id nil, e.g. after #destroy) is a no-op: there is nothing
-    # to persist, and a write would re-create the just-destroyed record. Mirrors
-    # the Python master's `if self._session_id and self._dirty`.
+    # to persist, and a write would re-create the just-destroyed record.
     #
     # Another request may have changed or ended this session since this one
     # loaded it: a logout, a #regenerate, a set that took a privilege away.
@@ -198,8 +197,27 @@ module Tina4
     # request changed onto it, and never re-creates a record another request
     # removed: it ends the session for this request instead, so no cookie goes
     # out for it.
+    #
+    # SLIDING EXPIRY (ADR-0087): a started session the store already holds is
+    # re-written on EVERY save, even when this request changed nothing. That
+    # write re-stamps the backend deadline to now + TINA4_SESSION_TTL, so expiry
+    # is measured from the last request that TOUCHED the session, not from its
+    # last change — a user actively reading pages stays logged in. The re-write
+    # is the SAME re-read, merged record the concurrent-save contract computes,
+    # so sliding never clobbers a concurrent change. PHP is the reference. The
+    # guards above take precedence over the slide: no id → nothing to slide;
+    # a record another request ended → forget + end, never re-created; a failed
+    # read → deadline untouched, dirty kept for a retry; TINA4_SESSION_TTL=0 →
+    # the slide re-stamps a zero (immortal) deadline (ADR-0027).
+    #
+    # The slide is scoped to @stored — an id the STORE actually holds (adopted,
+    # not freshly minted). ADR-0087's own guard: "a request with no session (no
+    # id issued, OR THE ID WAS NEVER ADOPTED) writes nothing — there is no
+    # deadline to move." A brand-new, unmodified session (minted id, @stored
+    # false) therefore still no-ops, exactly as before; a modified session of
+    # any kind still writes.
     def save
-      return true unless @id && @modified
+      return true unless @id && (@modified || @stored)
 
       record = @data
       if @stored

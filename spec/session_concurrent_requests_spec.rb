@@ -52,13 +52,25 @@ RSpec.describe "Tina4::Session saves from concurrent requests" do
     session.get_session_id
   end
 
+  # The file on disk for session_id ("sess_<sha256>.json", {"_data" => ...,
+  # "_expires" => <absolute deadline>}).
+  def session_file(session_id)
+    File.join(tmp_dir, "sess_#{Digest::SHA256.hexdigest(session_id)}.json")
+  end
+
   # The record on disk for session_id, or nil when there is none. Read from the
-  # file itself ("sess_<sha256>.json", {"_data" => ..., "_expires" => ...}).
+  # file itself, never through the session under test.
   def stored(session_id)
-    path = File.join(tmp_dir, "sess_#{Digest::SHA256.hexdigest(session_id)}.json")
+    path = session_file(session_id)
     return nil unless File.exist?(path)
 
     JSON.parse(File.read(path))["_data"]
+  end
+
+  # The absolute expiry deadline on disk for session_id, read from the file
+  # itself. The FileHandler bakes `now + ttl` into "_expires" at write time.
+  def stored_expiry(session_id)
+    JSON.parse(File.read(session_file(session_id)))["_expires"]
   end
 
   describe "a request in flight does not undo a logout" do
@@ -295,14 +307,31 @@ RSpec.describe "Tina4::Session saves from concurrent requests" do
   end
 
   describe "a save still writes what the request changed" do
-    it "writes nothing for a read-only request" do
+    # ADR-0087: a session's expiry SLIDES on activity. A request that started a
+    # session the store already holds re-writes the (unchanged) record on save,
+    # re-stamping the backend deadline to now + TINA4_SESSION_TTL, so a session
+    # expires after a span of INACTIVITY, not a fixed span after its last change.
+    # PHP is the reference (SessionConcurrentRequestsTest::testAnUnchangedSession
+    # IsStillWrittenSoExpiryCountsFromTheLastRequest). The re-written record is
+    # the re-read, merged current, so sliding never clobbers a concurrent change.
+    it "a read-only request moves the expiry forward" do
       sid = logged_in
-      before = File.mtime(File.join(tmp_dir, "sess_#{Digest::SHA256.hexdigest(sid)}.json"))
+
+      # Wind the stored deadline back to "about to expire" by writing the file
+      # directly (never through the session under test). Still in the future, so
+      # the read at save time does not treat it as already expired.
+      record = JSON.parse(File.read(session_file(sid)))
+      record["_expires"] = Time.now.to_f + 5
+      File.write(session_file(sid), JSON.generate(record))
+
       session = request(sid)
-      session.get("user")
+      session.get("user") # a request that only reads
       expect(session.save).to be(true)
 
-      expect(File.mtime(File.join(tmp_dir, "sess_#{Digest::SHA256.hexdigest(sid)}.json"))).to eq(before)
+      # The deadline has slid forward to ~now + ttl (default 3600s), well past
+      # the 5s it was wound back to, and the stored data is untouched.
+      expect(stored_expiry(sid)).to be > (Time.now.to_f + 3000)
+      expect(stored(sid)).to eq("user" => "alice")
     end
 
     it "saves a value changed in place with the next set" do
