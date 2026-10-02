@@ -35,6 +35,7 @@ RSpec.describe "API cross-origin token leak (F5)" do
     def port = @server.addr[1]
     def base_url = "http://127.0.0.1:#{port}"
     def last_headers = @headers
+    def last_path = @path
 
     def stop
       @running = false
@@ -59,6 +60,14 @@ RSpec.describe "API cross-origin token leak (F5)" do
           end
           client.read(headers.fetch("content-length", "0").to_i)
           @headers = headers unless request_line.nil?
+          @path = request_line.to_s.split[1]
+          target = @path.to_s[%r{\A/redirect\?to=(.+)\z}, 1]
+          if target
+            client.write("HTTP/1.1 302 Found\r\nLocation: #{URI.decode_www_form_component(target)}\r\n" \
+                         "Content-Length: 0\r\nConnection: close\r\n\r\n")
+            client.close
+            next
+          end
           body = '{"ok":true}'
           client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" \
                        "Set-Cookie: session=synthetic-cookie; Path=/\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
@@ -130,4 +139,64 @@ RSpec.describe "API cross-origin token leak (F5)" do
     end
   end
 
+  # A configured header can carry a credential under any name. It is bound to
+  # the base origin exactly like the token: never to a target on another origin,
+  # never onto a cross-origin redirect hop.
+  def redirect_to(url) = "/redirect?to=#{URI.encode_www_form_component(url)}"
+
+  [:ctor, :add_headers].each do |how|
+    it "configured header stays off an off-origin target (#{how})" do
+      base = TokenRecordingServer.new
+      other = TokenRecordingServer.new
+      begin
+        api = how == :ctor ? Tina4::API.new(base.base_url, headers: { "X-Api-Key" => "synthetic-key" }) : Tina4::API.new(base.base_url)
+        api.add_headers("X-Api-Key" => "synthetic-key") if how == :add_headers
+        expect(api.get("@127.0.0.1:#{other.port}/probe").status).to eq(200)
+        expect(other.last_headers).not_to have_key("x-api-key")
+        api.get("/probe")
+        expect(base.last_headers["x-api-key"]).to eq("synthetic-key")
+      ensure
+        base.stop
+        other.stop
+      end
+    end
+  end
+
+  it "configured and per-call headers stay off a cross-origin redirect" do
+    base = TokenRecordingServer.new
+    other = TokenRecordingServer.new
+    begin
+      api = Tina4::API.new(base.base_url, headers: { "X-Api-Key" => "synthetic-key", "Accept" => "text/plain" })
+      expect(api.get(redirect_to("#{other.base_url}/landed")).status).to eq(200)
+      expect(other.last_headers).not_to have_key("x-api-key")
+      expect(other.last_headers["accept"]).to eq("text/plain")
+
+      api.upload(redirect_to("#{other.base_url}/uploaded"), file_bytes: "x", filename: "x.txt",
+                                                            headers: { "X-Upload-Token" => "synthetic-call" })
+      expect(other.last_path).to eq("/uploaded")
+      expect(other.last_headers).not_to have_key("x-upload-token")
+
+      api.get(redirect_to("#{base.base_url}/landed"))
+      expect(base.last_headers["x-api-key"]).to eq("synthetic-key")
+    ensure
+      base.stop
+      other.stop
+    end
+  end
+
+  it "baseless client sends a configured header only to the URL it names" do
+    named = TokenRecordingServer.new
+    other = TokenRecordingServer.new
+    begin
+      api = Tina4::API.new("", headers: { "X-Api-Key" => "synthetic-key" })
+      api.get("#{named.base_url}/probe")
+      expect(named.last_headers["x-api-key"]).to eq("synthetic-key")
+      api.get("#{named.base_url}#{redirect_to("#{other.base_url}/landed")}")
+      expect(other.last_path).to eq("/landed")
+      expect(other.last_headers).not_to have_key("x-api-key")
+    ensure
+      named.stop
+      other.stop
+    end
+  end
 end
