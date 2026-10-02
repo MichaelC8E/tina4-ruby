@@ -215,7 +215,9 @@ def bench_paginated
 
   op = lambda do
     result = db.fetch("SELECT * FROM products WHERE category = ?", ["Cat 3"], limit: 20, offset: 0)
-    result.to_paginate(page: 1, per_page: 20)
+    # to_paginate takes NO arguments (ADR-0043): the envelope is derived from the
+    # query that produced this result (limit: 20, offset: 0 -> page 1, per_page 20).
+    result.to_paginate
   end
 
   teardown = lambda do
