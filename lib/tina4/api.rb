@@ -41,6 +41,14 @@ module Tina4
   # master's _STRIP_ON_CROSS_ORIGIN.
   API_STRIP_ON_CROSS_ORIGIN = %w[authorization cookie].freeze
 
+  # The only headers carried onto a different origin. A caller-set header can
+  # hold a credential under any name (X-Api-Key, X-Auth-Token, ...), so a
+  # denylist cannot contain it: the headers configured on the client (and any
+  # per-call header, on a redirect) are bound to the origin they were meant for,
+  # and only these content-negotiation headers cross. Compared case-insensitively.
+  API_KEEP_ON_CROSS_ORIGIN = %w[user-agent accept accept-encoding accept-language
+                                content-type content-length].freeze
+
   # A curated extension -> MIME map for guessing a multipart part's Content-Type
   # from its filename (Ruby core ships no mimetypes db, and pulling one in would
   # break the zero-dependency promise). tina4: a small built-in map covering the
@@ -265,7 +273,7 @@ module Tina4
       return error_response("download requires dest_path", path: nil) unless dest_path
 
       uri = build_uri(path, params)
-      headers = @headers.dup
+      headers = configured_headers(uri).dup
       cookie = cookie_header
       headers["Cookie"] = cookie if @cookies_enabled && cookie
       headers = origin_headers(uri, headers)
@@ -542,9 +550,19 @@ module Tina4
     end
 
     def apply_headers(request, extra_headers)
-      @headers.merge(extra_headers).each do |key, value|
+      configured_headers(request.uri).merge(extra_headers).each do |key, value|
         request[key] = value
       end
+    end
+
+    # Headers configured on the client belong to its base origin, like the
+    # token: a target on another origin gets only the cross-origin-safe ones. A
+    # client with no base has no origin to bind them to, and sends them to the
+    # URL each call names.
+    def configured_headers(uri)
+      return @headers if @base_url.empty? || uri.nil? || same_origin?(uri, URI.parse(@base_url))
+
+      keep_cross_origin(@headers)
     end
 
     # Execute the request with opt-in retry/backoff. Returns an APIResponse.
@@ -591,7 +609,7 @@ module Tina4
     end
 
     # Perform a real HTTP round-trip via Net::HTTP, following redirects in a
-    # bounded loop and stripping Authorization/Cookie on a cross-origin hop.
+    # bounded loop and carrying only API_KEEP_ON_CROSS_ORIGIN headers onto a cross-origin hop.
     # When stream_to is given, a 2xx body is streamed to that path in chunks
     # (never buffered whole) and no file is written on a non-2xx status.
     #
@@ -668,7 +686,7 @@ module Tina4
 
         if location
           new_uri = URI.join(current_uri.to_s, location)
-          current_headers = strip_cross_origin(current_headers) unless same_origin?(current_uri, new_uri)
+          current_headers = keep_cross_origin(current_headers) unless same_origin?(current_uri, new_uri)
           # 301/302/303 downgrade a non-GET/HEAD to GET and drop the body
           # (matches urllib); 307/308 preserve method + body.
           if [301, 302, 303].include?(redirect_code) && !%w[GET HEAD].include?(current_method)
@@ -785,6 +803,10 @@ module Tina4
 
     def strip_cross_origin(headers)
       headers.reject { |key, _| API_STRIP_ON_CROSS_ORIGIN.include?(key.to_s.downcase) }
+    end
+
+    def keep_cross_origin(headers)
+      headers.select { |key, _| API_KEEP_ON_CROSS_ORIGIN.include?(key.to_s.downcase) }
     end
 
     # Fetch a value from a Hash trying each key as both a symbol and a string.
