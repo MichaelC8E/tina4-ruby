@@ -757,6 +757,19 @@ module Tina4
 
     # ── migrate ───────────────────────────────────────────────────────────
 
+    # The migrate commands cannot do their job without a database, so they
+    # fail. Tina4.initialize! logs a connection error and leaves
+    # Tina4.database nil, and returning here used to exit 0 -- a deploy whose
+    # database URL was wrong, or missing, went on as though it had migrated.
+    def exit_without_database
+      if ENV["TINA4_DATABASE_URL"].to_s.strip.empty?
+        warn "No database configured. Set TINA4_DATABASE_URL in your .env file."
+      else
+        warn "Database unavailable: TINA4_DATABASE_URL is set but could not be opened (see the error above)."
+      end
+      exit 1
+    end
+
     def cmd_migrate(argv)
       options = {}
       parser = OptionParser.new do |opts|
@@ -769,11 +782,7 @@ module Tina4
       require_relative "../tina4"
       Tina4.initialize!(Dir.pwd)
 
-      db = Tina4.database
-      unless db
-        puts "No database configured. Set TINA4_DATABASE_URL in your .env file."
-        return
-      end
+      db = Tina4.database || exit_without_database
 
       migration = Tina4::Migration.new(db)
 
@@ -856,11 +865,7 @@ module Tina4
       require_relative "../tina4"
       Tina4.initialize!(Dir.pwd)
 
-      db = Tina4.database
-      unless db
-        puts "No database configured. Set TINA4_DATABASE_URL in your .env file."
-        return
-      end
+      db = Tina4.database || exit_without_database
 
       migration = Tina4::Migration.new(db)
       info = migration.status
@@ -899,11 +904,7 @@ module Tina4
       require_relative "../tina4"
       Tina4.initialize!(Dir.pwd)
 
-      db = Tina4.database
-      unless db
-        puts "No database configured. Set TINA4_DATABASE_URL in your .env file."
-        return
-      end
+      db = Tina4.database || exit_without_database
 
       migration = Tina4::Migration.new(db)
       results = migration.rollback(options[:steps])
