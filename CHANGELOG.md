@@ -6,6 +6,10 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.145 — 2026-10-03
+
+Two fixes land together. The Api client no longer carries an application-configured header onto a different origin: credentials travel under many names (`X-Api-Key`, a custom bearer header), so on a cross-origin redirect only content-negotiation and transport headers cross, and every configured or per-call header is bound to the origin it was meant for; a same-origin redirect keeps them. And `tina4ruby migrate` now exits 1 when there is no usable database (unreachable or misconfigured), so CI no longer reads a failed migration as success. Both are proven against real dependencies, no mocks. No runtime gems.
+
 ## 3.13.144 — 2026-10-02
 
 HEAD responses are locked to exactly one `Content-Length` on the wire, equal to the length the GET would have sent. A HEAD emitting two differing `Content-Length` headers is malformed (RFC 7230 s3.3.2); a strict proxy (nginx) 502s it while lenient clients show 200. Ruby already writes a single, correct `Content-Length` with an empty body; this release LOCKS it with a conformance test that boots the real built-in server and reads the raw socket, because the in-process test reads a response object and cannot see the wire - the layer where tina4-php shipped `Content-Length: 0` on every routed HEAD (fixed in the same release). Also internal: the serve-debug readiness harness is unified on the `Server:`-banner identity guard across all four frameworks, and a carbon-benchmark drift (a `to_paginate` call with arguments, which ADR-0043 forbids) is fixed so `carbon_benchmarks.rb --carbon` runs clean. No runtime behaviour change in ruby. The framework still has no required runtime dependencies.
