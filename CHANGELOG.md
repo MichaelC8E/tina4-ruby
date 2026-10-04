@@ -6,6 +6,17 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.146 — 2026-10-04
+
+### AI skills
+- Every skill now opens with a content list (table of contents) and a degrees-of-freedom legend (what is inviolable, what is a default, what is judgement).
+- New `tina4-cli` skill documents every `tina4` command and flag and the scaffolding discipline.
+- `tina4-maintainer` gains task checklists (PR review, release, installer signing, parity sweep); `tina4-design` split into focused reference files.
+- Skills installer now supports one-level-nested references; `install-skills.ps1` re-signed.
+
+### Framework
+- No framework code changes - the version bump carries the skills release across all four frameworks at parity.
+
 ## 3.13.145 — 2026-10-03
 
 Two fixes land together. The Api client no longer carries an application-configured header onto a different origin: credentials travel under many names (`X-Api-Key`, a custom bearer header), so on a cross-origin redirect only content-negotiation and transport headers cross, and every configured or per-call header is bound to the origin it was meant for; a same-origin redirect keeps them. And `tina4ruby migrate` now exits 1 when there is no usable database (unreachable or misconfigured), so CI no longer reads a failed migration as success. Both are proven against real dependencies, no mocks. No runtime gems.
