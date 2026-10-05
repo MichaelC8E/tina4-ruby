@@ -139,6 +139,17 @@ module Tina4
     schema
   end
 
+  # Readable name for one attached route middleware (class, instance, string
+  # spec or lambda) -- what route_list reports under "middleware".
+  def self.middleware_label(attached)
+    case attached
+    when ::String then attached
+    when ::Module then attached.name || attached.inspect
+    when ::Proc, ::Method then "proc"
+    else attached.class.name || attached.inspect
+    end
+  end
+
   # Informational only — whether the CONFIGURED host looks local.
   #
   # NOT the security gate. This reads TINA4_HOST_NAME (the configured bind
@@ -510,22 +521,47 @@ module Tina4
       raise ArgumentError, "Unknown tool: #{tool_name}" if tool.nil?
 
       arguments = params.fetch("arguments", {})
+      arguments = {} if arguments.nil?
       handler   = tool["handler"]
+
+      # Validate against the tool's input schema BEFORE invoking, so a missing
+      # or unknown argument is an actionable message, never a raw Ruby
+      # ArgumentError. Python parity (tina4_python.mcp).
+      argument_error = validate_tool_arguments(tool_name, tool["inputSchema"], arguments)
+      return mcp_text_content(argument_error) if argument_error
 
       # Call the handler -- support both keyword and positional args
       result = _invoke_handler(handler, arguments)
 
-      # Format result as MCP content
-      content = case result
-                when String
-                  [{ "type" => "text", "text" => result }]
-                when Hash, Array
-                  [{ "type" => "text", "text" => JSON.pretty_generate(result) }]
-                else
-                  [{ "type" => "text", "text" => result.to_s }]
-                end
+      mcp_text_content(result)
+    end
 
-      { "content" => content }
+    # Format a tool result as MCP content.
+    def mcp_text_content(result)
+      text = case result
+             when String then result
+             when Hash, Array then JSON.pretty_generate(result)
+             else result.to_s
+             end
+      { "content" => [{ "type" => "text", "text" => text }] }
+    end
+
+    # Returns nil when the arguments satisfy the schema, else an
+    # { "error" => "missing required argument 'p' (tool takes p1, p2)" } hash
+    # (or "unknown argument ..." with the same shape).
+    def validate_tool_arguments(tool_name, schema, arguments)
+      return { "error" => "arguments for #{tool_name} must be an object" } unless arguments.is_a?(Hash)
+
+      properties = (schema || {}).fetch("properties", {}).keys
+      takes = "(#{tool_name} takes #{properties.join(', ')})"
+
+      missing = (schema || {}).fetch("required", []).find { |name| !arguments.key?(name) }
+      return { "error" => "missing required argument '#{missing}' #{takes}" } if missing
+
+      unknown = arguments.keys.map(&:to_s).find { |name| !properties.include?(name) }
+      return { "error" => "unknown argument '#{unknown}' #{takes}" } if unknown
+
+      nil
     end
 
     def _handle_resources_list(_params)
@@ -888,7 +924,13 @@ module Tina4
         unless table.to_s =~ /\A[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)?\z/
           return { "error" => "Invalid table name" }
         end
-        db.columns(table)
+        # Schema metadata (PRAGMA / information_schema), never the first row, so
+        # an EMPTY table still reports its columns. A table that does not exist
+        # has no columns: say so rather than answering [].
+        columns = db.columns(table)
+        next { "error" => "table not found: #{table}" } if columns.nil? || columns.empty?
+
+        columns
       }, "Get column definitions for a table")
 
       # ── Route Tools ───────────────────────────────────
@@ -899,7 +941,8 @@ module Tina4
           {
             "method"        => route.method.to_s,
             "path"          => route.path.to_s,
-            "auth_required" => route.auth_required ? true : false
+            "auth_required" => route.auth_required ? true : false,
+            "middleware"    => route.middleware.map { |attached| Tina4.middleware_label(attached) }
           }
         end
       }, "List all registered routes")
@@ -1458,9 +1501,14 @@ module Tina4
         Tina4::Docs.cached(project_root).class_spec(name.to_s)
       }, "Full class reflection (methods, file, line) from the live API index")
 
-      server.register_tool("api_method", lambda { |class_name:, name:|
-        Tina4::Docs.cached(project_root).method_spec(class_name.to_s, name.to_s)
-      }, "Single method spec (signature, summary, file, line) from the live API index")
+      server.register_tool("api_method", lambda { |name:, **rest|
+        class_name = rest[:class].to_s
+        Tina4::Docs.cached(project_root).method_spec(class_name, name.to_s) ||
+          { "error" => "method not found: #{class_name}.#{name}" }
+      }, "Single method spec (signature, params, return, file, line) from the live API index",
+         { "type" => "object",
+           "properties" => { "class" => { "type" => "string" }, "name" => { "type" => "string" } },
+           "required" => %w[class name] })
 
       # ── Code/doc grounding (semantic FTS over this repo's source) ──
       # code_search is the fuzzy DUAL of the structural api_* tools:

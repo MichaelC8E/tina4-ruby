@@ -239,9 +239,13 @@ the developer can correct.
 ### 1. Keep the main session free — delegate to a worker
 When the developer gives an instruction, don't do the work inline. **Allocate it to a plan, then
 spawn a separate worker to execute it**, so the main session is always free for the next input.
-Tina4 **hot-reloads on save** (DevReload), so as the worker edits routes, models, and templates the
-developer watches the interface change **live in the browser** — keeping the main session open is
-what lets them observe and steer while the work happens. The main agent scopes, dispatches, and
+Under `tina4 serve`, saving a file triggers a dev reload (`POST /__dev/api/reload`): templates and
+SCSS refresh the browser live, and **new or edited route files in `src/routes/` are re-run** (new routes
+register, edited ones replace the old handler) without a restart. Models and other `require`d code are
+loaded once at boot, so a model change needs a restart. Run with plain `ruby app.rb` there is no
+watcher, so nothing reloads. The dev MCP `route_list` shows routes as currently registered, so a
+route file that was not reloaded is missing from it. Keeping the main session open is what lets the
+developer observe and steer while the work happens. The main agent scopes, dispatches, and
 reports; workers build and update the plan. When a worker finishes an item, surface it to the
 developer.
 
@@ -423,7 +427,7 @@ running (`tina4 serve` with `TINA4_DEBUG=true`):
 - **`api_search("render template")`** — ranked search across framework + your own code; returns the
   class, method, signature, and file:line. Run it BEFORE assuming a method exists.
 - **`api_class("Tina4::ORM")`** — every method on a class, with signatures.
-- **`api_method("Tina4::ORM", "find_by_id")`** — exact signature, params, return type, file and line
+- **`api_method({"class": "Tina4::ORM", "name": "find_by_id"})`** (both `class` and `name` are required; a missing or unknown argument returns `{"error": "missing required argument 'name' (api_method takes class, name)"}`) — exact signature, params, return type, file and line
   for one method.
 - **`code_search("where is the auth token issued?")`** — fuzzy/semantic full-text search over **THIS
   project's own source + docs** (the native `Tina4::Context` FTS5 index — zero-dep, kept live on every

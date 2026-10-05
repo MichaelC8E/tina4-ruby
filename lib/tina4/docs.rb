@@ -432,6 +432,7 @@ module Tina4
           private_flag = visibility != "public" || underscored
 
           summary, doc = split_doc(pending_doc)
+          returns = pending_doc.join(" ")[/@return\s+\[([^\]]+)\]/, 1].to_s
           method_fqn = if is_static
             "#{current_class[:fqn]}.#{mname}"
           else
@@ -446,6 +447,7 @@ module Tina4
             class_fqn:   current_class[:fqn],
             class:       current_class[:fqn],
             signature:   signature,
+            returns:     returns,
             summary:     summary,
             docstring:   doc,
             file:        rel_file,
@@ -620,9 +622,52 @@ module Tina4
         static:     entry[:static] || false,
         source:     entry[:source],
         version:    entry[:version],
-        params:     [],
-        return:     "",
+        params:     params_from_signature(entry[:signature]),
+        return:     entry[:returns].to_s,
       }
+    end
+
+    # Structured params parsed from a Ruby signature such as
+    # "fetch(sql, params = [], limit: 100, **opts)" -- same shape Python
+    # reports: [{name, type, required, default}]. Ruby has no inline type
+    # annotations, so type is "" unless the docblock says otherwise.
+    def params_from_signature(signature)
+      inner = signature.to_s[/\A[^(]*\((.*)\)\z/m, 1]
+      return [] if inner.nil? || inner.strip.empty?
+
+      split_top_level_commas(inner).map { |piece| param_entry(piece.strip) }
+    end
+
+    def param_entry(piece)
+      prefix = piece[/\A(\*\*|\*|&)/, 1]
+      return { name: piece, type: "", required: false, default: nil } if prefix
+
+      keyword = piece.match(/\A([A-Za-z_]\w*):\s*(.*)\z/m)
+      if keyword
+        default = keyword[2].strip
+        return { name: keyword[1], type: "", required: default.empty?, default: default.empty? ? nil : default }
+      end
+
+      name, default = piece.split(/\s*=\s*/, 2)
+      { name: name.strip, type: "", required: default.nil?, default: default&.strip }
+    end
+
+    def split_top_level_commas(text)
+      pieces = []
+      depth = 0
+      current = +""
+      text.each_char do |ch|
+        depth += 1 if "([{".include?(ch)
+        depth -= 1 if ")]}".include?(ch)
+        if ch == "," && depth.zero?
+          pieces << current
+          current = +""
+        else
+          current << ch
+        end
+      end
+      pieces << current unless current.strip.empty?
+      pieces
     end
 
     # ── Sync writer ──────────────────────────────────────────────────
