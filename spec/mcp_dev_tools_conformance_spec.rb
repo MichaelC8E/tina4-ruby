@@ -137,7 +137,7 @@ RSpec.describe "Dev-MCP tools conformance (invoke every tool)" do
       "plan_flesh"         => { "name" => "setup-plan", "prompt" => "add steps" },
       "api_search"         => { "query" => "Database", "k" => 3 },
       "api_class"          => { "name" => "Database" },
-      "api_method"         => { "class_name" => "Database", "name" => "fetch" },
+      "api_method"         => { "class" => "Database", "name" => "fetch" },
       "code_search"        => { "query" => "widget", "k" => 3, "rebuild" => false }
     }
 
