@@ -6,6 +6,16 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/ruby/36-releases
 
+## 3.13.150 — 2026-10-11
+
+### Dev admin
+- The dashboard AI talks to the `tina4 ai serve` gateway on :11435, not a model
+  directly; `/__dev/split` serves the shared split-preview asset; the scaffold
+  panel is data-driven from the CLI generators; and the Code Landscape metrics
+  bubbles are free to spread (zoom-out + Fit frame the layout, was crammed into
+  the viewport). The dashboard metrics scan passes `--no-history` so it stops
+  self-reloading. Shipped in the shared SPA bundle.
+
 ## 3.13.149 — 2026-10-10
 
 ### CRUD
