@@ -50,7 +50,11 @@ module Tina4
       binary = engine_path
       raise MetricsEngineError, "tina4 not found on PATH - #{INSTALL_HINT}" unless binary
 
-      stdout, stderr, status = Open3.capture3(binary, 'metrics', '--path', path.to_s, '--json')
+      # --no-history: a dashboard READ must never write .tina4-metrics.json.
+      # Without it every scan records history, the file watcher sees the write
+      # and reloads the page, which re-scans - a self-inflicted ~2-second reload
+      # loop that makes the dashboard unusable.
+      stdout, stderr, status = Open3.capture3(binary, 'metrics', '--path', path.to_s, '--json', '--no-history')
       unless status.success?
         detail = (stderr.empty? ? stdout : stderr).strip.lines.first || "exit code #{status.exitstatus}"
         raise MetricsEngineError, "tina4 metrics failed on #{path}: #{detail.strip}"
