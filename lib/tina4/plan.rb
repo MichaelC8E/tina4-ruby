@@ -407,7 +407,7 @@ module Tina4
         user_parts << "Extra context from caller: #{prompt}" unless prompt.to_s.empty?
         user_parts << "Reply with ONLY the JSON array — no explanation, no markdown fences."
 
-        ai_url = ENV.fetch("TINA4_AI_URL", "http://localhost:11437/api/chat")
+        ai_url = ENV.fetch("TINA4_AI_URL", "http://localhost:11435/api/chat")
         ai_model = ENV.fetch("TINA4_AI_MODEL", "qwen2.5-coder:14b")
 
         reply = begin

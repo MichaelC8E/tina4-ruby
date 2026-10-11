@@ -439,6 +439,8 @@ module Tina4
           serve_dashboard
         when ["GET", "/__dev/js/tina4-dev-admin.min.js"]
           serve_dev_js
+        when ["GET", "/__dev/split"], ["GET", "/__dev/split/"]
+          serve_split
         when ["GET", "/__dev/toolbar.css"]
           # tina4stack #115: the injected toolbar's stylesheet, served as an
           # external asset so the toolbar carries no inline style= and renders
@@ -931,6 +933,18 @@ module Tina4
           [200, { "content-type" => "application/javascript; charset=utf-8" }, [File.read(js_path)]]
         else
           [404, { "content-type" => "text/plain" }, ["tina4-dev-admin.min.js not found"]]
+        end
+      end
+
+      # Detached split view — dashboard/editor LEFT, live app preview RIGHT.
+      # Served from the SHARED asset (the same tina4-dev-admin-split.html the
+      # python/php/node frameworks serve); a plain shell, no toolbar injected.
+      def serve_split
+        path = File.join(File.dirname(__FILE__), "public", "js", "tina4-dev-admin-split.html")
+        if File.file?(path)
+          [200, { "content-type" => "text/html; charset=utf-8" }, [File.read(path)]]
+        else
+          [404, { "content-type" => "text/plain" }, ["tina4-dev-admin-split.html not found"]]
         end
       end
 
