@@ -52,7 +52,7 @@ module Tina4
       return from_geojson(value, srid) if value.is_a?(Hash)
       if value.is_a?(String)
         text = value.strip
-        match = text.match(/\A(?:SRID\s*=\s*(\d+)\s*;\s*)?POINT\s*(?:Z|M|ZM)?\s*\(\s*([-+0-9.eE]+)\s+([-+0-9.eE]+)(?:\s+[-+0-9.eE]+)*\s*\)\z/i)
+        match = text.match(/\A(?:SRID\s*=\s*(\d+)\s*;\s*)?POINT\s*(?:Z|M|ZM)?\s*\(\s*([-+0-9.eE]+)\s++([-+0-9.eE]+)(?:\s++[-+0-9.eE]+)*+\s*+\)\z/i)
         return new(match[2], match[3], srid: match[1] ? match[1].to_i : srid) if match
         raw = [text].pack("H*") if text.length >= 42 && text.length.even? && text.match?(/\A[0-9a-f]+\z/i)
         raw ||= value.b if [0, 1].include?(value.getbyte(0))

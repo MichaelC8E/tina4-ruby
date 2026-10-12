@@ -71,7 +71,7 @@ module Tina4
         text.scan(/^\s*def\s+(self\.)?([A-Za-z_][\w!?=]*)/) { |m| out["symbols"] << m[1] }
         text.scan(/^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/) { |m| out["imports"] << m[0] }
         # Tina4.get "/path"  OR  Tina4::Router.get("/path")  OR  get "/path" do
-        route_re = /(?:Tina4(?:::Router)?\.|^\s*)(get|post|put|patch|delete|any|any_method|secure_get|secure_post)\s*\(?\s*['"]([^'"]+)['"]/
+        route_re = /(?:Tina4(?:::Router)?\.|^\s*)(get|post|put|patch|delete|any|any_method|secure_get|secure_post)\s*+\(?\s*+['"]([^'"]+)['"]/
         text.scan(route_re) do |meth, path|
           next unless ROUTE_METHODS.include?(meth)
           out["routes"] << { "method" => meth.upcase, "path" => path, "handler" => "" }

@@ -80,7 +80,7 @@ module Tina4
     # @param features  [Array<String>] any of "calls", "chat", "files"
     def mount(prefix: "", authorize: nil, storage: nil, features: nil)
       features = features || ["calls"]
-      p = prefix.to_s.gsub(%r{\A/+|/+\z}, "")
+      p = prefix.to_s.gsub(%r{\A/++|/++\z}, "")
       p = p.empty? ? "" : "/#{p}"
       @authorize = authorize
       @storage = storage

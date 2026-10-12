@@ -457,7 +457,7 @@ module Tina4
     # per-instance to_snake_case when only the class name is known.
     def self.to_snake_case_static(name)
       s = name.to_s
-      s.gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
+      s.gsub(/([A-Z])(?=[A-Z][a-z])/, '\1_')
        .gsub(/([a-z\d])([A-Z])/, '\1_\2')
        .downcase
     end
