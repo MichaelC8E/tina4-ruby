@@ -49,6 +49,43 @@ RSpec.describe Tina4::Template do
       Tina4::Template::TwigEngine.new(context, tmp_dir).render(content)
     end
 
+    # ── ReDoS hardening (CodeQL rb/polynomial-redos) ──
+    # Every tag regex used a \s*(.+?)\s* / (.+?) / .*? shape CodeQL flags as
+    # polynomial on a naive backtracking engine. Each is now a TEMPERED token
+    # that walks to the first delimiter in one pass ([^%] | %(?!\}) for %}; and
+    # [^{] | \{(?!…) for a {% … %} close). Ruby's Onigmo already handles these
+    # linearly, so a timing test can't tell old from new — it would pass either
+    # way and prove nothing. The alert clears on the CodeQL re-scan; what these
+    # tests GUARD is the real risk of a tempered rewrite — a behaviour regression.
+    # Each case below renders DIFFERENTLY if a tempered pattern is wrong, so they
+    # bite: a literal `{` inside a body, a `%` inside an expression, trimmed
+    # whitespace, and nested/elseif branching the tempered lookaheads must honour.
+    describe "ReDoS hardening (tempered rewrite — behaviour preserved)" do
+      it "keeps a literal { inside an {% if %} body (tempered [^{] path)" do
+        expect(render("{% if s %}a{b}c{% endif %}", { "s" => true })).to eq("a{b}c")
+      end
+
+      it "keeps a literal { inside a {% for %} body" do
+        expect(render("{% for i in items %}{x}{% endfor %}", { "items" => [1, 2] })).to eq("{x}{x}")
+      end
+
+      it "keeps a % inside a {{ }} expression and a {% set %} value (tempered %(?!}) path)" do
+        expect(render("{{ p }}", { "p" => "50%" })).to eq("50%")
+        expect(render("{% set p = 'pct 50%' %}{{ p }}")).to eq("pct 50%")
+      end
+
+      it "still trims surrounding whitespace in {{ }}, {% set %} and {% for %}" do
+        expect(render("{{   name   }}", { "name" => "World" })).to eq("World")
+        expect(render("{%   set   g   =   'Hi'   %}{{ g }}")).to eq("Hi")
+        expect(render("{%  for  x  in  items  %}{{ x }}{% endfor %}", { "items" => %w[a b] })).to eq("ab")
+      end
+
+      it "still resolves elseif and nested if (tempered else/endif lookahead)" do
+        expect(render("{% if a %}A{% elseif b %}B{% else %}C{% endif %}", { "a" => false, "b" => true })).to eq("B")
+        expect(render("{% if a %}[{% if b %}X{% endif %}]{% endif %}", { "a" => true, "b" => true })).to eq("[X]")
+      end
+    end
+
     describe "variable interpolation" do
       it "replaces variables" do
         expect(render("{{ name }}", { "name" => "Alice" })).to eq("Alice")
