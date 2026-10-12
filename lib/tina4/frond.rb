@@ -3236,6 +3236,31 @@ module Tina4
       def set_form_token_session_id(session_id)
         self.form_token_session_id = session_id
       end
+
+      # The Rack env of the request this thread is dispatching. The app sets it
+      # for each request, so a token is bound to the session that rendered it
+      # without sharing a process-wide value between Puma threads.
+      def request_env=(env)
+        Thread.current[:tina4_form_token_env] = env
+      end
+
+      # The current request's session id, or "" outside a request.
+      #
+      # A session that holds nothing is sent no cookie, so the form's own POST
+      # would arrive under a newly minted id and fail its own token. Rendering a
+      # bound token therefore stores a marker, which makes the session persist.
+      def request_session_id
+        env = Thread.current[:tina4_form_token_env]
+        request = env && env["tina4.request"]
+        return "" unless request.respond_to?(:session)
+
+        session = request.session
+        sid = session.respond_to?(:get_session_id) ? session.get_session_id.to_s : ""
+        return "" if sid.empty?
+
+        session.set("_tina4_csrf", true) if session.respond_to?(:fresh?) && session.fresh?
+        sid
+      end
     end
 
     # Generate a raw JWT form token string.
@@ -3262,7 +3287,8 @@ module Tina4
       end
 
       # Include session_id for CSRF session binding
-      sid = form_token_session_id.to_s
+      sid = request_session_id
+      sid = form_token_session_id.to_s if sid.empty?
       payload["session_id"] = sid unless sid.empty?
 
       # get_token's expires_in is MINUTES, like every framework's. This used to

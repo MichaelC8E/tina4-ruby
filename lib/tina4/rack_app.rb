@@ -108,6 +108,8 @@ module Tina4
       # value. Cleared in `ensure`, exactly like the request id (an overlapping
       # request on another thread never shares it).
       Tina4::Csp.set_current_nonce(Tina4::Csp.generate_nonce)
+      # form_token() binds each token to this request's session (CSRF).
+      Tina4::Frond.request_env = env
 
       begin
         result = dispatch_pipeline(env)
@@ -121,6 +123,7 @@ module Tina4
         # nonce has the same lifetime.
         Tina4::Log.clear_request_id
         Tina4::Csp.clear_current_nonce
+        Tina4::Frond.request_env = nil
       end
     end
 

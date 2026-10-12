@@ -502,7 +502,8 @@ module Tina4
     #     Authorization, and Tina4's own session mechanism IS a cookie. Because
     #     the key is method + URL, storing such a response replays one signed-in
     #     user's page to whoever asks for that URL next; a response that installs
-    #     a session (Set-Cookie) is per-user by construction for the same reason.
+    #     a session (Set-Cookie, or a session about to add one) is per-user by
+    #     construction for the same reason.
     #
     # Both cookie cases stay cacheable when the response opts in explicitly with
     # a shared-cache directive, which is how a genuinely public page served to
@@ -517,6 +518,13 @@ module Tina4
       return shared_cache_allowed?(response) unless header_value(request, "Authorization").nil?
       return shared_cache_allowed?(response) unless header_value(request, "Cookie").nil?
       return shared_cache_allowed?(response) unless header_value(response, "Set-Cookie").nil?
+      # The session cookie is added after this check, so a response that is
+      # about to install one carries no Set-Cookie yet: a request that came
+      # without a cookie and leaves its session holding data (a form token
+      # bound to it marks it) is that case. Read the session only if the
+      # request already opened one; asking for it would open one.
+      session = request.instance_variable_get(:@session) if request.instance_variable_defined?(:@session)
+      return shared_cache_allowed?(response) if session.respond_to?(:fresh?) && !session.fresh?
 
       true
     end
