@@ -420,7 +420,7 @@ module Tina4
       def process_includes(content)
         # ReDoS-safe: negated class for the quoted path, and the (unused) `with`
         # clause is consumed by a tempered token instead of a lazy (.+?)\s* pair.
-        content.gsub(/\{%\s*include\s+["']([^"']*)["'](?:\s+with\s+(?:[^%]|%(?!\}))*)?\s*%\}/) do
+        content.gsub(/\{%\s*include\s+["']([^"']*)["'](?:\s+with\s++(?:[^%]|%(?!\}))*+)?\s*+%\}/) do
           inc_path = Regexp.last_match(1)
           full_path = resolve_template(inc_path)
           if full_path && File.exist?(full_path)
@@ -436,7 +436,7 @@ module Tina4
         max_depth = 10
         depth = 0
         while content =~ /\{%\s*for\s+/ && depth < max_depth
-          content = content.gsub(/\{%\s*for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+((?:[^%]|%(?!\}))+)%\}((?:[^{]|\{(?!%\s*endfor\s*%\}))*)\{%\s*endfor\s*%\}/m) do
+          content = content.gsub(/\{%\s*for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s++((?:[^%]|%(?!\}))++)%\}((?:[^{]|\{(?!%\s*endfor\s*%\}))*+)\{%\s*endfor\s*%\}/m) do
             key_or_val = Regexp.last_match(1)
             val_name = Regexp.last_match(2)
             collection_expr = Regexp.last_match(3).strip
@@ -483,7 +483,7 @@ module Tina4
           content = content.gsub(
             # ReDoS-safe: tempered tokens — condition walks to %}, bodies stop at
             # the first else/endif, so no lazy (.+?)/\s* overlap to backtrack on.
-            /\{%\s*if\s+((?:[^%]|%(?!\}))+)%\}((?:[^{]|\{(?!%\s*(?:else|endif)\s*%\}))*)(?:\{%\s*else\s*%\}((?:[^{]|\{(?!%\s*endif\s*%\}))*))?\{%\s*endif\s*%\}/m
+            /\{%\s*if\s++((?:[^%]|%(?!\}))++)%\}((?:[^{]|\{(?!%\s*(?:else|endif)\s*%\}))*+)(?:\{%\s*else\s*%\}((?:[^{]|\{(?!%\s*endif\s*%\}))*+))?\{%\s*endif\s*%\}/m
           ) do
             condition = Regexp.last_match(1).strip
             true_body = Regexp.last_match(2)
@@ -532,7 +532,7 @@ module Tina4
         # lazy (.+?) both match spaces — two ways to assign the whitespace, so
         # polynomial backtracking. A tempered token ([^}] | } not before }) walks
         # to the first }} in one deterministic pass; strip the whitespace in code.
-        content.gsub(/\{\{((?:[^}]|\}(?!\}))+)\}\}/) do
+        content.gsub(/\{\{((?:[^}]|\}(?!\}))++)\}\}/) do
           expr = Regexp.last_match(1).strip
           evaluate_piped_expression(expr).to_s
         end
