@@ -272,8 +272,10 @@ module Tina4
         content = process_conditionals(content)
         content = process_set(content)
         content = process_expressions(content)
-        content = content.gsub(/\{%.*?%\}/m, "")
-        content = content.gsub(/\{#.*?#\}/m, "")
+        # ReDoS-safe: a tempered token ([^%] | % not before }) walks to the first
+        # %} in one pass — no lazy `.*?` re-scanning each `{%` start (that was O(n^2)).
+        content = content.gsub(/\{%(?:[^%]|%(?!\}))*%\}/m, "")
+        content = content.gsub(/\{#(?:[^#]|#(?!\}))*#\}/m, "")
         content
       end
 
@@ -295,7 +297,9 @@ module Tina4
       private
 
       def process_extends(content)
-        if content =~ /\{%\s*extends\s+["'](.+?)["']\s*%\}/
+        # ReDoS-safe: a negated class ([^"']*) for the quoted path can't backtrack
+        # across the closing quote the way a lazy (.+?) does.
+        if content =~ /\{%\s*extends\s+["']([^"']*)["']\s*%\}/
           parent_path = Regexp.last_match(1)
           full_parent = resolve_template(parent_path)
           if full_parent && File.exist?(full_parent)
@@ -358,7 +362,7 @@ module Tina4
       # grandparent, blocks are merged (child overrides parent) and the
       # chain is followed recursively.
       def render_with_blocks(parent_source, child_blocks)
-        extends_re = /\A\s*\{%\s*extends\s+["'](.+?)["']\s*%\}/
+        extends_re = /\A\s*\{%\s*extends\s+["']([^"']*)["']\s*%\}/
 
         # Multi-level: if the parent itself extends another template, recurse
         if parent_source =~ extends_re
@@ -375,7 +379,7 @@ module Tina4
 
             # Resolve nested blocks: if a block value contains {% block inner %}
             # tags, replace them with merged_blocks values too
-            block_re = /\{%[-\s]*block\s+(\w+)\s*-?%\}(.*?)\{%[-\s]*endblock\s*-?%\}/m
+            block_re = /\{%[-\s]*block\s+(\w+)\s*-?%\}((?:[^{]|\{(?!%[-\s]*endblock\s*-?%\}))*)\{%[-\s]*endblock\s*-?%\}/m
             changed = true
             while changed
               changed = false
@@ -398,7 +402,7 @@ module Tina4
         end
 
         # Leaf parent (no extends) — resolve blocks and render
-        parent_source.gsub(/\{%[-\s]*block\s+(\w+)\s*-?%\}(.*?)\{%[-\s]*endblock\s*-?%\}/m) do
+        parent_source.gsub(/\{%[-\s]*block\s+(\w+)\s*-?%\}((?:[^{]|\{(?!%[-\s]*endblock\s*-?%\}))*)\{%[-\s]*endblock\s*-?%\}/m) do
           name = Regexp.last_match(1)
           default_body = Regexp.last_match(2)
           child_blocks[name] || default_body
@@ -406,7 +410,7 @@ module Tina4
       end
 
       def process_blocks(content)
-        content.gsub(/\{%\s*block\s+(\w+)\s*%\}(.*?)\{%\s*endblock\s*%\}/m) do
+        content.gsub(/\{%\s*block\s+(\w+)\s*%\}((?:[^{]|\{(?!%\s*endblock\s*%\}))*)\{%\s*endblock\s*%\}/m) do
           name = Regexp.last_match(1)
           default_body = Regexp.last_match(2)
           @blocks[name] || default_body
@@ -414,7 +418,9 @@ module Tina4
       end
 
       def process_includes(content)
-        content.gsub(/\{%\s*include\s+["'](.+?)["'](?:\s+with\s+(.+?))?\s*%\}/) do
+        # ReDoS-safe: negated class for the quoted path, and the (unused) `with`
+        # clause is consumed by a tempered token instead of a lazy (.+?)\s* pair.
+        content.gsub(/\{%\s*include\s+["']([^"']*)["'](?:\s+with\s++(?:[^%]|%(?!\}))*+)?\s*+%\}/) do
           inc_path = Regexp.last_match(1)
           full_path = resolve_template(inc_path)
           if full_path && File.exist?(full_path)
@@ -430,10 +436,10 @@ module Tina4
         max_depth = 10
         depth = 0
         while content =~ /\{%\s*for\s+/ && depth < max_depth
-          content = content.gsub(/\{%\s*for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+?)\s*%\}(.*?)\{%\s*endfor\s*%\}/m) do
+          content = content.gsub(/\{%\s*for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s++((?:[^%]|%(?!\}))++)%\}((?:[^{]|\{(?!%\s*endfor\s*%\}))*+)\{%\s*endfor\s*%\}/m) do
             key_or_val = Regexp.last_match(1)
             val_name = Regexp.last_match(2)
-            collection_expr = Regexp.last_match(3)
+            collection_expr = Regexp.last_match(3).strip
             body = Regexp.last_match(4)
             collection = evaluate_expression(collection_expr)
             output = +""
@@ -475,9 +481,11 @@ module Tina4
         depth = 0
         while content =~ /\{%\s*if\s+/ && depth < max_depth
           content = content.gsub(
-            /\{%\s*if\s+(.+?)\s*%\}(.*?)(?:\{%\s*else\s*%\}(.*?))?\{%\s*endif\s*%\}/m
+            # ReDoS-safe: tempered tokens — condition walks to %}, bodies stop at
+            # the first else/endif, so no lazy (.+?)/\s* overlap to backtrack on.
+            /\{%\s*if\s++((?:[^%]|%(?!\}))++)%\}((?:[^{]|\{(?!%\s*(?:else|endif)\s*%\}))*+)(?:\{%\s*else\s*%\}((?:[^{]|\{(?!%\s*endif\s*%\}))*+))?\{%\s*endif\s*%\}/m
           ) do
-            condition = Regexp.last_match(1)
+            condition = Regexp.last_match(1).strip
             true_body = Regexp.last_match(2)
             false_body = Regexp.last_match(3) || ""
 
@@ -511,17 +519,21 @@ module Tina4
       end
 
       def process_set(content)
-        content.gsub(/\{%\s*set\s+(\w+)\s*=\s*(.+?)\s*%\}/) do
+        content.gsub(/\{%\s*set\s+(\w+)\s*=((?:[^%]|%(?!\}))+)%\}/) do
           var_name = Regexp.last_match(1)
-          expr = Regexp.last_match(2)
+          expr = Regexp.last_match(2).strip
           @context[var_name] = evaluate_expression(expr)
           ""
         end
       end
 
       def process_expressions(content)
-        content.gsub(/\{\{\s*(.+?)\s*\}\}/) do
-          expr = Regexp.last_match(1)
+        # ReDoS-safe: the old /\{\{\s*(.+?)\s*\}\}/ let the surrounding \s* AND the
+        # lazy (.+?) both match spaces — two ways to assign the whitespace, so
+        # polynomial backtracking. A tempered token ([^}] | } not before }) walks
+        # to the first }} in one deterministic pass; strip the whitespace in code.
+        content.gsub(/\{\{((?:[^}]|\}(?!\}))++)\}\}/) do
+          expr = Regexp.last_match(1).strip
           evaluate_piped_expression(expr).to_s
         end
       end

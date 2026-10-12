@@ -724,7 +724,7 @@ module Tina4
       # trailing slash on a prefix could leave "/api//users").
       def join_group_path(prefix, path)
         full = "#{prefix}/#{path.sub(%r{\A/+}, '')}"
-        full = "/#{full.gsub(%r{\A/+|/+\z}, '')}"
+        full = "/#{full.gsub(%r{\A/++|/++\z}, '')}"
         full.gsub(%r{/+}, "/")
       end
 

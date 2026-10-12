@@ -466,7 +466,7 @@ module Tina4
       # is now honoured here too (explicit > env > HS256).
       def authenticate_request(headers, secret: nil, algorithm: nil)
         auth_header = headers["HTTP_AUTHORIZATION"] || headers["Authorization"] || ""
-        return nil unless auth_header =~ /\ABearer\s+(.+)\z/i
+        return nil unless auth_header =~ /\ABearer\s++(.+)\z/i
 
         token = Regexp.last_match(1)
 
@@ -518,7 +518,7 @@ module Tina4
       def bearer_auth
         lambda do |env|
           auth_header = env["HTTP_AUTHORIZATION"] || ""
-          return false unless auth_header =~ /\ABearer\s+(.+)\z/i
+          return false unless auth_header =~ /\ABearer\s++(.+)\z/i
 
           token = Regexp.last_match(1)
 
@@ -664,7 +664,7 @@ module Tina4
         auth_header = env["HTTP_AUTHORIZATION"] || ""
         return true if auth_header.empty?
 
-        if auth_header =~ /\ABearer\s+(.+)\z/i
+        if auth_header =~ /\ABearer\s++(.+)\z/i
           valid_token(Regexp.last_match(1))
         else
           false
