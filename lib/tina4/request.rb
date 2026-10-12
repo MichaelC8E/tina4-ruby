@@ -205,7 +205,7 @@ module Tina4
       FileUtils.mkdir_p(target_dir)
       dest = File.join(target_dir, base)
       # Defence in depth: the resolved parent of the destination must be exactly
-      # the resolved target dir (guards a pre-existing symlink at target/base).
+      # the resolved target dir.
       real_dir = File.realpath(target_dir)
       real_parent = File.realpath(File.dirname(dest))
       unless real_parent == real_dir
@@ -213,9 +213,31 @@ module Tina4
       end
 
       content = file["content"] || file[:content] || ""
-      File.binwrite(dest, content)
+      write_upload(dest, content)
       dest
     end
+
+    # Never write THROUGH a link already at target/base: a symlink (even a
+    # dangling one) leads out of target_dir, and a hard link shares its bytes
+    # with a file elsewhere. Such an entry is removed so the upload gets a file
+    # of its own; a plain file is rewritten in place and keeps its mode.
+    def self.write_upload(dest, content)
+      File.unlink(dest) if File.symlink?(dest)
+      flags = File::WRONLY | File::CREAT | File::BINARY | (defined?(File::NOFOLLOW) ? File::NOFOLLOW : 0)
+      io = File.open(dest, flags, 0o666)
+      if io.stat.nlink > 1
+        io.close
+        File.unlink(dest)
+        io = File.open(dest, flags | File::EXCL, 0o666)
+      end
+      begin
+        io.truncate(0)
+        io.write(content)
+      ensure
+        io.close
+      end
+    end
+    private_class_method :write_upload
 
     def initialize(env, path_params = {})
       @env = env
