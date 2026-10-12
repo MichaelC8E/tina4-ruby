@@ -28,6 +28,9 @@ RSpec.describe "CSRF form token session binding" do
     ENV["TINA4_CSRF"] = "true"
     ENV["TINA4_SECRET"] = "test-csrf-secret-0123456789abcdef"
     ENV["TINA4_SESSION_PATH"] = File.join(tmp_dir, "sessions")
+    # The process-wide fallback id is set by other specs; none of these rely on it.
+    @saved_fallback_id = Tina4::Frond.form_token_session_id
+    Tina4::Frond.form_token_session_id = ""
     Tina4::Router.clear!
     Tina4::Middleware.clear!
     Tina4::Middleware.use(Tina4::CsrfMiddleware)
@@ -55,6 +58,7 @@ RSpec.describe "CSRF form token session binding" do
     Tina4::Router.clear!
     Tina4::Middleware.clear!
     @saved_env.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+    Tina4::Frond.form_token_session_id = @saved_fallback_id
     FileUtils.rm_rf(tmp_dir)
   end
 
