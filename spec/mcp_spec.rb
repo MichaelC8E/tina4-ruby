@@ -471,6 +471,90 @@ RSpec.describe "Tina4 MCP" do
         end
       end
     end
+
+    {
+      "a new file in a linked dir" => ["file_write", { "path" => "linkdir/planted.txt", "content" => "PWNED" }],
+      "a new subdir in a linked dir" => ["file_write", { "path" => "linkdir/sub/planted.txt", "content" => "PWNED" }],
+      "a dangling link" => ["file_write", { "path" => "dangle.txt", "content" => "PWNED" }],
+      "an asset under a linked dir" => ["asset_upload", { "filename" => "pub/planted.txt", "content" => "PWNED" }]
+    }.each do |label, (tool, arguments)|
+      it "refuses a write through a symlink out of the project (#{label})" do
+        Dir.mktmpdir do |lab|
+          FileUtils.mkdir_p([File.join(lab, "proj", "src", "public"), File.join(lab, "outside")])
+          File.symlink(File.join(lab, "outside"), File.join(lab, "proj", "linkdir"))
+          File.symlink(File.join(lab, "outside", "dangle.txt"), File.join(lab, "proj", "dangle.txt"))
+          File.symlink(File.join(lab, "outside"), File.join(lab, "proj", "src", "public", "pub"))
+          server = Tina4::McpServer.new("/test-sandbox-link", name: "Sandbox Link Test")
+          old_cwd = Dir.pwd
+          Dir.chdir(File.join(lab, "proj"))
+          begin
+            Tina4::McpDevTools.register(server)
+
+            resp = JSON.parse(server.handle_message({
+              "jsonrpc" => "2.0", "id" => 1, "method" => "tools/call",
+              "params"  => { "name" => tool, "arguments" => arguments }
+            }))
+            expect(resp).to have_key("error")
+            expect(Dir.children(File.join(lab, "outside"))).to eq([]) # written outside the project
+          ensure
+            Dir.chdir(old_cwd)
+          end
+        end
+      end
+    end
+
+    {
+      "to a new file inside the project" => ["data/real.txt", true],
+      "climbing out through a linked dir" => ["linkdir/../planted.txt", false],
+      "in a loop" => ["alias.txt", false]
+    }.each do |label, (link, allowed)|
+      it "judges a dangling link by where it points (#{label})" do
+        Dir.mktmpdir do |lab|
+          FileUtils.mkdir_p([File.join(lab, "proj", "data"), File.join(lab, "outside", "deep")])
+          File.symlink(File.join(lab, "outside", "deep"), File.join(lab, "proj", "linkdir"))
+          File.symlink(link, File.join(lab, "proj", "alias.txt"))
+          server = Tina4::McpServer.new("/test-sandbox-dangle", name: "Sandbox Dangle Test")
+          old_cwd = Dir.pwd
+          Dir.chdir(File.join(lab, "proj"))
+          begin
+            Tina4::McpDevTools.register(server)
+            resp = JSON.parse(server.handle_message({
+              "jsonrpc" => "2.0", "id" => 1, "method" => "tools/call",
+              "params"  => { "name" => "file_write", "arguments" => { "path" => "alias.txt", "content" => "WRITTEN" } }
+            }))
+          ensure
+            Dir.chdir(old_cwd)
+          end
+          if allowed
+            expect(resp).not_to have_key("error")
+            expect(File.exist?(File.join(lab, "proj", "data", "real.txt"))).to be(true)
+          else
+            expect(resp.dig("error", "message").to_s).to include("escapes project directory")
+            expect(File.exist?(File.join(lab, "outside", "planted.txt"))).to be(false)
+          end
+        end
+      end
+    end
+
+    it "allows a write to a new nested directory inside the project" do
+      Dir.mktmpdir do |tmp|
+        server = Tina4::McpServer.new("/test-sandbox-nested", name: "Sandbox Nested Test")
+        old_cwd = Dir.pwd
+        Dir.chdir(tmp)
+        begin
+          Tina4::McpDevTools.register(server)
+
+          resp = JSON.parse(server.handle_message({
+            "jsonrpc" => "2.0", "id" => 1, "method" => "tools/call",
+            "params"  => { "name" => "file_write", "arguments" => { "path" => "notes/deep/ok.txt", "content" => "fine" } }
+          }))
+          expect(resp).not_to have_key("error")
+          expect(File.read(File.join(tmp, "notes", "deep", "ok.txt"))).to eq("fine")
+        ensure
+          Dir.chdir(old_cwd)
+        end
+      end
+    end
   end
 
   # ── write_claude_config ───────────────────────────────────────
