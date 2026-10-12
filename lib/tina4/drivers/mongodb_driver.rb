@@ -296,7 +296,7 @@ module Tina4
       end
 
       def parse_projection(sql)
-        m = sql.match(/^SELECT\s+((?:(?!\s+FROM\b).)*)\s+FROM\b/im)
+        m = sql.match(/^SELECT\s++((?:(?!\s+FROM\b).)*+)\s+FROM\b/im)
         return {} unless m
 
         cols = m[1].strip
@@ -313,7 +313,7 @@ module Tina4
       end
 
       def parse_order_by(sql)
-        m = sql.match(/\bORDER\s+BY\s+((?:(?!\s+LIMIT\b|\s+OFFSET\b|\s*$).)*)(?:\s+LIMIT|\s+OFFSET|\s*$)/im)
+        m = sql.match(/\bORDER\s+BY\s++((?:(?!\s+LIMIT\b|\s+OFFSET\b|\s*$).)*+)(?:\s+LIMIT|\s+OFFSET|\s*$)/im)
         return {} unless m
 
         sort = {}
