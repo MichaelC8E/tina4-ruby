@@ -316,11 +316,11 @@ module Tina4
           sql
             .gsub(/\bBIGINT\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/i, "BIGSERIAL PRIMARY KEY")
             .gsub(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/i, "SERIAL PRIMARY KEY")
-            .gsub(/\s*\bAUTOINCREMENT\b/i, "")
+            .gsub(/\s*+\bAUTOINCREMENT\b/i, "")
         when "mssql"
           sql.gsub(/AUTOINCREMENT/i, "IDENTITY(1,1)")
         when "firebird"
-          sql.gsub(/\s*AUTOINCREMENT\b/i, "")
+          sql.gsub(/\s*+AUTOINCREMENT\b/i, "")
         else
           sql
         end
@@ -490,7 +490,9 @@ module Tina4
       "mariadb" => "mysql"
     }.freeze
 
-    INSERT_VALUES = /\A\s*INSERT\s+INTO\s+.+?\s+VALUES\s*\(([^()]*)\)\s*\z/im
+    # ReDoS-safe: the table ref is bounded by non-space at both ends (\S(?:.*?\S)?)
+    # so the `\s+` before VALUES can't overlap it the way `.+?\s+` did.
+    INSERT_VALUES = /\A\s*INSERT\s+INTO\s+\S(?:.*?\S)?\s+VALUES\s*\(([^()]*)\)\s*\z/im
 
     # Engines whose last_insert_id reports the FIRST generated id of a multi-row
     # INSERT rather than the last. Verified live against MySQL.

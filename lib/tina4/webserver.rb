@@ -199,7 +199,7 @@ module Tina4
     # @param host [String] the host the main socket binds
     # @return [Array<String>] extra bind addresses (possibly empty)
     def self.loopback_bind_hosts(host)
-      normalized = host.to_s.strip.downcase.gsub(/\A\[+|\]+\z/, "")
+      normalized = host.to_s.strip.downcase.gsub(/\A\[++|\]++\z/, "")
       case normalized
       when "localhost"            then ["127.0.0.1", "::1"]
       when "127.0.0.1", "0.0.0.0" then ["::1"]

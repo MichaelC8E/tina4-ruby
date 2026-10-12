@@ -1247,7 +1247,7 @@ module Tina4
       # token in the body, auth token in the session) is still authenticated.
       candidates = []
       auth_header = env["HTTP_AUTHORIZATION"] || ""
-      candidates << [Regexp.last_match(1), :header] if auth_header =~ /\ABearer\s+(.+)\z/i
+      candidates << [Regexp.last_match(1), :header] if auth_header =~ /\ABearer\s++(.+)\z/i
       form_token = _extract_form_token(_read_rack_body(env), env)
       candidates << [form_token, :body] if form_token && !form_token.empty?
 

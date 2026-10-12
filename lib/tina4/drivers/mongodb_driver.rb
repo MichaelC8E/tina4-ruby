@@ -296,7 +296,7 @@ module Tina4
       end
 
       def parse_projection(sql)
-        m = sql.match(/^SELECT\s+(.*?)\s+FROM\b/im)
+        m = sql.match(/^SELECT\s+((?:(?!\s+FROM\b).)*)\s+FROM\b/im)
         return {} unless m
 
         cols = m[1].strip
@@ -313,7 +313,7 @@ module Tina4
       end
 
       def parse_order_by(sql)
-        m = sql.match(/\bORDER\s+BY\s+(.*?)(?:\s+LIMIT|\s+OFFSET|\s*$)/im)
+        m = sql.match(/\bORDER\s+BY\s+((?:(?!\s+LIMIT\b|\s+OFFSET\b|\s*$).)*)(?:\s+LIMIT|\s+OFFSET|\s*$)/im)
         return {} unless m
 
         sort = {}
@@ -518,7 +518,7 @@ module Tina4
       def parse_insert(sql)
         result = { operation: :insert }
 
-        m = sql.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/im)
+        m = sql.match(/INSERT\s+INTO\s+(\w+)\s*+\(([^)]+)\)\s*+VALUES\s*+\(([^)]+)\)/im)
         unless m
           result[:collection] = :unknown
           result[:document] = {}
@@ -564,7 +564,7 @@ module Tina4
       def parse_update(sql)
         result = { operation: :update }
 
-        m = sql.match(/UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?$/im)
+        m = sql.match(/UPDATE\s+(\w+)\s+SET\s+((?:(?!\s+WHERE\b).)+)(?:\s+WHERE\s++(.+))?$/im)
         unless m
           raise ArgumentError, "MongodbDriver: cannot parse UPDATE statement: #{sql}"
         end
@@ -621,7 +621,7 @@ module Tina4
       def parse_delete(sql)
         result = { operation: :delete }
 
-        m = sql.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/im)
+        m = sql.match(/DELETE\s+FROM\s+(\w++)(?:\s++WHERE\s++(.+))?$/im)
         unless m
           raise ArgumentError, "MongodbDriver: cannot parse DELETE statement: #{sql}"
         end

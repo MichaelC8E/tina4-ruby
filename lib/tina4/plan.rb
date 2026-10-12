@@ -53,7 +53,7 @@ module Tina4
       end
 
       def slugify(title)
-        slug = title.to_s.strip.downcase.gsub(/[^a-z0-9_\-]+/, "-").gsub(/\A-+|-+\z/, "")
+        slug = title.to_s.strip.downcase.gsub(/[^a-z0-9_\-]+/, "-").gsub(/\A-++|-++\z/, "")
         slug = slug[0, 80]
         slug.empty? ? "plan-#{Time.now.to_i}" : slug
       end
@@ -69,7 +69,7 @@ module Tina4
         section = nil # :steps | :notes | :other | nil
 
         lines.each do |raw|
-          line = raw.sub(/[[:space:]]+\z/, "")
+          line = raw.sub(/[[:space:]]++\z/, "")
           if title.empty? && line.start_with?("# ")
             title = line[2..].to_s.strip
             next
