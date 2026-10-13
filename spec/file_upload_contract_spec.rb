@@ -122,6 +122,77 @@ RSpec.describe "File upload contract" do
         Tina4::Request.save_upload({ "filename" => "ok\u0000.txt", "content" => "x" }, target)
       end.to raise_error(ArgumentError)
     end
+
+    %w[symlink dangling hardlink].each do |link|
+      it "safe save replaces a #{link} at the name instead of writing through it" do
+        target = File.join(@root, "uploads")
+        outside = File.join(@root, "outside")
+        FileUtils.mkdir_p([target, outside])
+        File.binwrite(File.join(outside, "loot"), "ORIGINAL")
+        case link
+        when "symlink" then File.symlink(File.join(outside, "loot"), File.join(target, "pic.txt"))
+        when "dangling" then File.symlink(File.join(outside, "new.txt"), File.join(target, "pic.txt"))
+        else File.link(File.join(outside, "loot"), File.join(target, "pic.txt"))
+        end
+
+        Tina4::Request.save_upload({ "filename" => "pic.txt", "content" => "UPLOADED" }, target)
+
+        expect(File.binread(File.join(outside, "loot"))).to eq("ORIGINAL") # written outside the target dir
+        expect(File.exist?(File.join(outside, "new.txt"))).to be(false) # created outside the target dir
+        expect(File.symlink?(File.join(target, "pic.txt"))).to be(false)
+        expect(File.binread(File.join(target, "pic.txt"))).to eq("UPLOADED")
+        expect(Dir.children(target)).to eq(["pic.txt"])
+      end
+    end
+
+    it "safe save never follows a link swapped in after its check" do
+      target = File.join(@root, "uploads")
+      outside = File.join(@root, "outside")
+      FileUtils.mkdir_p([target, outside])
+      File.binwrite(File.join(outside, "loot"), "ORIGINAL")
+      File.symlink(File.join(outside, "loot"), File.join(target, "pic.txt"))
+      allow(File).to receive(:symlink?).and_return(false)
+
+      expect do
+        Tina4::Request.save_upload({ "filename" => "pic.txt", "content" => "UPLOADED" }, target)
+      end.to raise_error(SystemCallError)
+      expect(File.binread(File.join(outside, "loot"))).to eq("ORIGINAL")
+    end
+
+    it "safe save rewrites a plain file in place, keeping its mode" do
+      skip "POSIX permission bits" if Gem.win_platform?
+      target = File.join(@root, "uploads")
+      FileUtils.mkdir_p(target)
+      File.binwrite(File.join(target, "run.sh"), "OLD CONTENT")
+      File.chmod(0o755, File.join(target, "run.sh"))
+
+      Tina4::Request.save_upload({ "filename" => "run.sh", "content" => "NEW" }, target)
+
+      expect(File.binread(File.join(target, "run.sh"))).to eq("NEW")
+      expect(File.stat(File.join(target, "run.sh")).mode & 0o777).to eq(0o755)
+    end
+
+    it "safe save refuses a file it may not write" do
+      skip "POSIX permission bits, not root" if Gem.win_platform? || Process.euid.zero?
+      target = File.join(@root, "uploads")
+      FileUtils.mkdir_p(target)
+      File.binwrite(File.join(target, "pic.txt"), "ORIGINAL")
+      File.chmod(0o444, File.join(target, "pic.txt"))
+
+      expect do
+        Tina4::Request.save_upload({ "filename" => "pic.txt", "content" => "UPLOADED" }, target)
+      end.to raise_error(Errno::EACCES)
+      expect(File.binread(File.join(target, "pic.txt"))).to eq("ORIGINAL")
+    end
+
+    it "safe save takes any name the filesystem takes" do
+      target = File.join(@root, "uploads")
+      name = "#{"a" * 240}.txt"
+
+      Tina4::Request.save_upload({ "filename" => name, "content" => "UPLOADED" }, target)
+
+      expect(File.binread(File.join(target, name))).to eq("UPLOADED")
+    end
   end
 
   # ── UP-CHUNKED-BYPASS: running per-chunk size guard (413) ──────────────────
