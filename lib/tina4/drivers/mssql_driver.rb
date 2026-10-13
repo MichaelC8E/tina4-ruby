@@ -222,7 +222,12 @@ module Tina4
 
       def parse_connection(str)
         # Format: mssql://user:pass@host:port/database
-        match = str.match(%r{(?:mssql|sqlserver)://(?:(\w+):([^@]+)@)?([^:/]+)(?::(\d+))?/(.+)})
+        # Possessive quantifiers (++): every quantified class is bounded by a
+        # delimiter it cannot itself match (\w++ by ':', [^@]++ by '@', [^:/]++
+        # by ':'/'/' , \d++ by ')'), so possessive changes nothing but what the
+        # engine tries on failure -- it kills the backtracking CodeQL flags as
+        # polynomial-redos without altering a single successful parse.
+        match = str.match(%r{(?:mssql|sqlserver)://(?:(\w++):([^@]++)@)?([^:/]++)(?::(\d++))?/(.+)})
         if match
           { username: match[1], password: match[2], host: match[3],
             port: match[4]&.to_i, database: match[5] }
