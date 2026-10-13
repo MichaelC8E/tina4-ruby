@@ -675,6 +675,37 @@ module Tina4
 
   # ── Built-in dev tools ────────────────────────────────────────────
   module McpDevTools
+    # Where +path+ will land once every symlink in it is followed, including the
+    # parts that do not exist yet: a NEW file is created through its deepest
+    # existing parent, and a dangling symlink through the place it names. nil
+    # when that cannot be worked out (a link loop, an unreadable link).
+    # Does +path+, once its symlinks are followed, land outside +project_root+?
+    # A root that no longer exists holds nothing to link through, so nothing
+    # under it is judged.
+    def self.lands_outside?(path, project_root)
+      real_root = File.realpath(project_root)
+      real = real_path_of(path)
+      real_prefix = "#{real_root.chomp(File::SEPARATOR)}#{File::SEPARATOR}"
+      !(real && (real == real_root || real.start_with?(real_prefix)))
+    rescue SystemCallError
+      false
+    end
+
+    def self.real_path_of(path, hops = 0)
+      probe = path
+      probe = File.dirname(probe) until File.exist?(probe) || File.symlink?(probe) || File.dirname(probe) == probe
+      return File.realpath(probe) if File.exist?(probe)
+      return nil if hops >= 40
+
+      # A dangling symlink. Its target is joined as text, not normalised, so a
+      # ".." after a linked component is resolved the way the OS will follow it.
+      target = File.readlink(probe)
+      base = target.start_with?(File::SEPARATOR) ? target : "#{File.dirname(probe)}#{File::SEPARATOR}#{target}"
+      real_path_of("#{base}#{path[probe.length..]}", hops + 1)
+    rescue SystemCallError
+      nil
+    end
+
     # Register all 24 built-in dev tools on the given McpServer.
     def self.register(server)
       project_root = File.expand_path(Dir.pwd)
@@ -794,18 +825,11 @@ module Tina4
         unless resolved == project_root || resolved.start_with?(root_prefix)
           raise ArgumentError, "Path escapes project directory: #{rel_path}"
         end
-        # Belt-and-braces against symlink escapes: if the path already exists,
-        # canonicalise it and re-check containment. A symlink inside the tree
-        # pointing outside would otherwise slip past the textual check. New
-        # paths (parent not created yet) have no realpath and rely on the
-        # expand_path containment above.
-        if File.exist?(resolved)
-          real = File.realpath(resolved)
-          real_root = File.realpath(project_root)
-          real_prefix = "#{real_root.chomp(File::SEPARATOR)}#{File::SEPARATOR}"
-          unless real == real_root || real.start_with?(real_prefix)
-            raise ArgumentError, "Path escapes project directory: #{rel_path}"
-          end
+        # Belt-and-braces against symlink escapes: canonicalise the path and
+        # re-check containment. A symlink inside the tree pointing outside
+        # would otherwise slip past the textual check.
+        if McpDevTools.lands_outside?(resolved, project_root)
+          raise ArgumentError, "Path escapes project directory: #{rel_path}"
         end
         resolved
       end
